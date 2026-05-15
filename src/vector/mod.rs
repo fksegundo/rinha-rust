@@ -7,8 +7,8 @@ pub enum ParseError {
     InvalidFormat,
 }
 
-use std::borrow::Cow;
 use serde::Deserialize;
+use std::borrow::Cow;
 
 pub fn parse_query(payload: &[u8], out: &mut QueryVector) -> Result<(), ParseError> {
     out.fill(0);
@@ -278,7 +278,11 @@ fn try_parse_serde(payload: &[u8], out: &mut QueryVector) -> Result<(), ParseErr
     out[7] = quantize(parsed.terminal.km_from_home / 1_000.0);
     out[8] = quantize(parsed.customer.tx_count_24h as f64 / 20.0);
     out[9] = if parsed.terminal.is_online { SCALE } else { 0 };
-    out[10] = if parsed.terminal.card_present { SCALE } else { 0 };
+    out[10] = if parsed.terminal.card_present {
+        SCALE
+    } else {
+        0
+    };
     out[12] = quantize(mcc_risk(parse_mcc(parsed.merchant.mcc.as_bytes())));
     out[13] = quantize(parsed.merchant.avg_amount / 10_000.0);
 
