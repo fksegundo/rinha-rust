@@ -2,10 +2,7 @@ version: "3.9"
 
 services:
   api1:
-    image: ${APP_IMAGE:-rinha-rust-api:local}
-    build:
-      context: .
-      dockerfile: submission/Dockerfile
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
       RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
@@ -14,13 +11,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "${API_CPU_LIMIT:-0.44}"
+          cpus: "0.44"
           memory: "170M"
   api2:
-    image: ${APP_IMAGE:-rinha-rust-api:local}
-    build:
-      context: .
-      dockerfile: submission/Dockerfile
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
       RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
@@ -29,10 +23,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "${API_CPU_LIMIT:-0.44}"
+          cpus: "0.44"
           memory: "170M"
   lb:
-    image: ${LB_IMAGE:-rinha-lb:local}
+    image: ghcr.io/fksegundo/rinha-api-lb:latest
     ports:
       - "9999:9999"
     environment:
@@ -44,7 +38,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "${LB_CPU_LIMIT:-0.12}"
+          cpus: "0.12"
           memory: "10M"
     depends_on:
       - api1
