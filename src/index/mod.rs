@@ -5,7 +5,7 @@ pub mod search;
 #[cfg(test)]
 mod tests;
 
-use crate::{DIMS, K, PACKED_DIMS, QueryVector};
+use crate::{DIMS, K, PACKED_DIMS, QueryVector, SCALE};
 use std::fs::File;
 use std::mem;
 use std::os::fd::AsRawFd;
@@ -138,12 +138,19 @@ impl SpecialistIndex {
         let bytes = mapping.as_slice();
         let mut cursor = 8usize;
 
-        let _scale = read_i32(bytes, &mut cursor)?;
+        let scale = read_i32(bytes, &mut cursor)?;
         let packed_dims = read_i32(bytes, &mut cursor)? as usize;
         let reference_count = read_i32(bytes, &mut cursor)? as usize;
         let partition_count = read_i32(bytes, &mut cursor)? as usize;
         let node_count = read_i32(bytes, &mut cursor)? as usize;
         let total_blocks = read_i32(bytes, &mut cursor)? as usize;
+
+        if scale != SCALE as i32 {
+            return Err(format!(
+                "invalid index scale: expected {}, got {}",
+                SCALE, scale
+            ));
+        }
 
         if packed_dims != PACKED_DIMS {
             return Err("invalid packed dimensions".to_string());
@@ -252,10 +259,6 @@ impl SpecialistIndex {
         query: &QueryVector,
         mut stats: Option<&mut SearchStats>,
     ) -> u8 {
-        if let Some(count) = corrected_fraud_count(query) {
-            return count;
-        }
-
         let mut best_dists = [i64::MAX; K];
         let mut best_labels = [0u8; K];
 
@@ -568,39 +571,6 @@ pub fn compute_partition_key(vector: &QueryVector) -> u32 {
     }
 
     key
-}
-
-fn corrected_fraud_count(query: &QueryVector) -> Option<u8> {
-    const CORRECTIONS: [([i16; PACKED_DIMS], u8); 4] = [
-        (
-            [
-                476, 4096, 3234, 4630, 2731, 415, 208, 2945, 3277, 0, 8192, 0, 1229, 191, 0, 0,
-            ],
-            2,
-        ),
-        (
-            [
-                1241, 4096, 8192, 6055, 5461, 614, 1331, 1633, 3277, 0, 8192, 8192, 6144, 184, 0, 0,
-            ],
-            2,
-        ),
-        (
-            [
-                1703, 4779, 7075, 6411, 2731, 614, 2277, 604, 2048, 0, 8192, 8192, 6963, 135, 0, 0,
-            ],
-            2,
-        ),
-        (
-            [
-                752, 2048, 2089, 2493, 6827, 501, 2284, 602, 2458, 8192, 0, 0, 1638, 155, 0, 0,
-            ],
-            2,
-        ),
-    ];
-
-    CORRECTIONS
-        .iter()
-        .find_map(|(candidate, count)| (query == candidate).then_some(*count))
 }
 
 #[inline(always)]

@@ -1,4 +1,4 @@
-use crate::PACKED_DIMS;
+use crate::{PACKED_DIMS, SCALE};
 
 pub struct IndexWriter {
     buf: Vec<u8>,
@@ -11,7 +11,7 @@ impl IndexWriter {
 
     pub fn write_header(&mut self, reference_count: i32) -> Result<(), String> {
         self.buf.extend_from_slice(b"RNSPCST1"); // magic (8)
-        self.write_i32(8192)?; // scale (4)
+        self.write_i32(SCALE as i32)?; // scale (4)
         self.write_i32(PACKED_DIMS as i32)?; // packed_dims (4)
         self.write_i32(reference_count)?; // reference_count (4)
         // partition_count placeholder (4)

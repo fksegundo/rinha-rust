@@ -1,11 +1,26 @@
 #[cfg(test)]
 mod tests {
     use crate::index::SpecialistIndex;
+    use crate::index::build::{Reference, build_index};
     use crate::vector;
+    use crate::{PACKED_DIMS, SCALE};
 
     #[test]
     fn test_specialist_index_roundtrip() {
-        let index_path = "/tmp/test.idx";
+        let index_path = "/tmp/rinha-rust-test.idx";
+        let references = vec![
+            Reference {
+                vector: [0i16; PACKED_DIMS],
+                label: 0,
+            },
+            Reference {
+                vector: [SCALE; PACKED_DIMS],
+                label: 1,
+            },
+        ];
+        let index_bytes = build_index(references, 64, 0).expect("failed to build index");
+        std::fs::write(index_path, index_bytes).expect("failed to write test index");
+
         let index = SpecialistIndex::open(index_path).expect("failed to open index");
 
         let payloads = std::fs::read_to_string(
