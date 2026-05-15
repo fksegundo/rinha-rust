@@ -421,54 +421,6 @@ fn find_and_read_known_merchants(
     Ok(count)
 }
 
-fn read_double(json: &[u8], name: &[u8]) -> Option<f64> {
-    let start = find_value_start(json, name, &mut 0).ok()?;
-    read_double_at(json, start).ok()
-}
-
-fn read_int(json: &[u8], name: &[u8]) -> Option<i32> {
-    let start = find_value_start(json, name, &mut 0).ok()?;
-    read_int_at(json, start).ok()
-}
-
-fn read_bool(json: &[u8], name: &[u8]) -> Option<bool> {
-    let start = find_value_start(json, name, &mut 0).ok()?;
-    read_bool_at(json, start).ok()
-}
-
-fn read_string<'a>(json: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
-    let start = find_value_start(json, name, &mut 0).ok()?;
-    read_string_at(json, start).ok()
-}
-
-fn read_known_merchants(json: &[u8], hashes: &mut [u64; 64]) -> Option<usize> {
-    let start = find_value_start(json, b"\"known_merchants\"", &mut 0).ok()?;
-    if start >= json.len() || json[start] != b'[' {
-        return None;
-    }
-    let rel_end = json[start..].iter().position(|&b| b == b']')?;
-    let array_end = start + rel_end;
-    let mut i = start + 1;
-    let mut count = 0usize;
-    while i < array_end {
-        while i < array_end && json[i] != b'"' {
-            i += 1;
-        }
-        if i >= array_end {
-            break;
-        }
-        let content_start = i + 1;
-        let rel = json[content_start..array_end]
-            .iter()
-            .position(|&b| b == b'"')?;
-        if count < hashes.len() {
-            hashes[count] = hash_bytes(&json[content_start..content_start + rel]);
-            count += 1;
-        }
-        i = content_start + rel + 1;
-    }
-    Some(count)
-}
 
 fn read_double_at(json: &[u8], start: usize) -> Result<f64, ParseError> {
     let s = &json[start..];
@@ -556,45 +508,6 @@ fn read_string_at<'a>(json: &'a [u8], start: usize) -> Result<&'a [u8], ParseErr
     Err(ParseError::InvalidValue)
 }
 
-fn find_object<'a>(json: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
-    let start = find_value_start(json, name, &mut 0).ok()?;
-    slice_object_at(json, start)
-}
-
-fn slice_object_at<'a>(json: &'a [u8], start: usize) -> Option<&'a [u8]> {
-    if start >= json.len() || json[start] != b'{' {
-        return None;
-    }
-    let mut depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    for i in start..json.len() {
-        let b = json[i];
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if b == b'\\' {
-                escaped = true;
-            } else if b == b'"' {
-                in_string = false;
-            }
-            continue;
-        }
-        if b == b'"' {
-            in_string = true;
-            continue;
-        }
-        if b == b'{' {
-            depth += 1;
-        } else if b == b'}' {
-            depth -= 1;
-            if depth == 0 {
-                return Some(&json[start..=i]);
-            }
-        }
-    }
-    None
-}
 
 fn is_json_whitespace(b: u8) -> bool {
     matches!(b, b' ' | b'\n' | b'\r' | b'\t')
@@ -602,11 +515,19 @@ fn is_json_whitespace(b: u8) -> bool {
 
 // ─── Hash ──────────────────────────────────────────────────────────────────
 
+#[inline(always)]
 fn hash_bytes(value: &[u8]) -> u64 {
-    let mut hash: u64 = 14_695_981_039_346_656_037;
-    for &b in value {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(1_099_511_628_211);
+    let mut hash = 0x517cc1b727220a95u64;
+    let mut i = 0;
+    while i + 8 <= value.len() {
+        let word = u64::from_le_bytes(value[i..i+8].try_into().unwrap());
+        hash = hash.rotate_left(5) ^ word;
+        hash = hash.wrapping_mul(0x517cc1b727220a95);
+        i += 8;
+    }
+    for &b in &value[i..] {
+        hash = hash.rotate_left(5) ^ (b as u64);
+        hash = hash.wrapping_mul(0x517cc1b727220a95);
     }
     hash
 }
@@ -617,14 +538,14 @@ fn parse_mcc(mcc: &[u8]) -> i32 {
     if mcc.len() != 4 {
         return 0;
     }
-    let mut result = 0i32;
-    for &b in mcc {
-        if !b.is_ascii_digit() {
-            return 0;
-        }
-        result = result * 10 + ((b - b'0') as i32);
+    let a = mcc[0].wrapping_sub(b'0');
+    let b = mcc[1].wrapping_sub(b'0');
+    let c = mcc[2].wrapping_sub(b'0');
+    let d = mcc[3].wrapping_sub(b'0');
+    if a > 9 || b > 9 || c > 9 || d > 9 {
+        return 0;
     }
-    result
+    (a as i32) * 1000 + (b as i32) * 100 + (c as i32) * 10 + (d as i32)
 }
 
 fn mcc_risk(mcc: i32) -> f64 {
@@ -677,15 +598,26 @@ fn parse2(s: &[u8], offset: usize) -> Result<i32, ParseError> {
     if offset + 2 > s.len() {
         return Err(ParseError::InvalidValue);
     }
-    let a = (s[offset] - b'0') as i32;
-    let b = (s[offset + 1] - b'0') as i32;
-    Ok(a * 10 + b)
+    let a = s[offset].wrapping_sub(b'0');
+    let b = s[offset + 1].wrapping_sub(b'0');
+    if a > 9 || b > 9 {
+        return Err(ParseError::InvalidValue);
+    }
+    Ok((a as i32) * 10 + (b as i32))
 }
 
 fn parse4(s: &[u8], offset: usize) -> Result<i32, ParseError> {
-    let a = parse2(s, offset)?;
-    let b = parse2(s, offset + 2)?;
-    Ok(a * 100 + b)
+    if offset + 4 > s.len() {
+        return Err(ParseError::InvalidValue);
+    }
+    let a = s[offset].wrapping_sub(b'0');
+    let b = s[offset + 1].wrapping_sub(b'0');
+    let c = s[offset + 2].wrapping_sub(b'0');
+    let d = s[offset + 3].wrapping_sub(b'0');
+    if a > 9 || b > 9 || c > 9 || d > 9 {
+        return Err(ParseError::InvalidValue);
+    }
+    Ok((a as i32) * 1000 + (b as i32) * 100 + (c as i32) * 10 + (d as i32))
 }
 
 fn days_from_civil(y: i32, m: i32, d: i32) -> i64 {

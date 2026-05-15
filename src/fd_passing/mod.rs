@@ -27,9 +27,12 @@ where
                 let tcp = unsafe { TcpStream::from_raw_fd(fd) };
                 let _ = tcp.set_nodelay(true);
                 let handler = Arc::clone(&handler);
-                std::thread::spawn(move || {
-                    handler(tcp);
-                });
+                std::thread::Builder::new()
+                    .stack_size(256 * 1024)
+                    .spawn(move || {
+                        handler(tcp);
+                    })
+                    .expect("failed to spawn fd handler thread");
             }
             Err(e) => {
                 eprintln!("fd accept error: {}", e);

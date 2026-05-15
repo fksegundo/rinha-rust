@@ -498,7 +498,14 @@ impl SpecialistIndex {
                 unsafe {
                     use std::arch::x86_64::*;
                     let next_base = (start_block + b + 1) * DIMS * LANES;
-                    _mm_prefetch(self.vectors.add(next_base) as *const i8, _MM_HINT_T0);
+                    let ptr = self.vectors.add(next_base) as *const i8;
+                    _mm_prefetch(ptr, _MM_HINT_T0);
+                    _mm_prefetch(ptr.add(64), _MM_HINT_T0);
+                    _mm_prefetch(ptr.add(128), _MM_HINT_T0);
+                    _mm_prefetch(ptr.add(192), _MM_HINT_T0);
+                    
+                    let labels_ptr = self.labels.add((start_block + b + 1) * LANES) as *const i8;
+                    _mm_prefetch(labels_ptr, _MM_HINT_T0);
                 }
             }
 
@@ -589,12 +596,13 @@ fn insert_best(dist: i64, label: u8, best_dists: &mut [i64; K], best_labels: &mu
 
 #[inline(always)]
 fn scan_block_avx2(vectors: &[i16], block_base: usize, query: &QueryVector) -> [i64; LANES] {
-    let mut block_dists = [0i64; LANES];
-
     #[cfg(target_arch = "x86_64")]
     unsafe {
         use std::arch::x86_64::*;
+        let mut sum64_lo = _mm256_setzero_si256();
+        let mut sum64_hi = _mm256_setzero_si256();
         let mut sum32 = _mm256_setzero_si256();
+
         for d in 0..DIMS {
             let q_vec = _mm_set1_epi16(query[d]);
             let v_ptr = vectors.as_ptr().add(block_base + d * LANES);
@@ -605,22 +613,28 @@ fn scan_block_avx2(vectors: &[i16], block_base: usize, query: &QueryVector) -> [
             sum32 = _mm256_add_epi32(sum32, sq);
 
             if (d + 1) % 4 == 0 {
-                let mut arr = [0i32; LANES];
-                _mm256_storeu_si256(arr.as_mut_ptr() as *mut __m256i, sum32);
-                for i in 0..LANES {
-                    block_dists[i] += arr[i] as i64;
-                }
+                let lo = _mm256_cvtepi32_epi64(_mm256_castsi256_si128(sum32));
+                let hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(sum32, 1));
+                sum64_lo = _mm256_add_epi64(sum64_lo, lo);
+                sum64_hi = _mm256_add_epi64(sum64_hi, hi);
                 sum32 = _mm256_setzero_si256();
             }
         }
-        let mut arr = [0i32; LANES];
-        _mm256_storeu_si256(arr.as_mut_ptr() as *mut __m256i, sum32);
-        for i in 0..LANES {
-            block_dists[i] += arr[i] as i64;
-        }
+
+        let lo = _mm256_cvtepi32_epi64(_mm256_castsi256_si128(sum32));
+        let hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(sum32, 1));
+        sum64_lo = _mm256_add_epi64(sum64_lo, lo);
+        sum64_hi = _mm256_add_epi64(sum64_hi, hi);
+
+        let mut block_dists = [0i64; LANES];
+        _mm256_storeu_si256(block_dists.as_mut_ptr() as *mut __m256i, sum64_lo);
+        _mm256_storeu_si256(block_dists.as_mut_ptr().add(4) as *mut __m256i, sum64_hi);
+        
+        return block_dists;
     }
 
-    block_dists
+    #[cfg(not(target_arch = "x86_64"))]
+    scan_block_scalar(vectors, block_base, query)
 }
 
 #[inline(always)]
@@ -667,9 +681,17 @@ unsafe fn lower_bound_box_avx2(query: &QueryVector, min: &QueryVector, max: &Que
 
         let sq = _mm256_madd_epi16(diff, diff);
 
-        let mut arr = [0i32; 8];
-        _mm256_storeu_si256(arr.as_mut_ptr() as *mut __m256i, sq);
-        arr.iter().map(|&x| x as i64).sum()
+        let lo = _mm256_cvtepi32_epi64(_mm256_castsi256_si128(sq));
+        let hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(sq, 1));
+        let sum64 = _mm256_add_epi64(lo, hi);
+        
+        let sum_hi = _mm256_extracti128_si256(sum64, 1);
+        let sum_128 = _mm_add_epi64(_mm256_castsi256_si128(sum64), sum_hi);
+        
+        let s0 = _mm_extract_epi64(sum_128, 0);
+        let s1 = _mm_extract_epi64(sum_128, 1);
+        
+        s0 + s1
     }
 }
 

@@ -38,11 +38,12 @@ fn run_tcp_mode(index: Arc<SpecialistIndex>, bind_addr: &str) {
     let num_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(4);
-    let pool = threadpool::ThreadPool::new(num_threads);
+    let pool = threadpool::ThreadPool::new(num_threads * 64);
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
+                let _ = stream.set_nodelay(true);
                 let index = Arc::clone(&index);
                 pool.execute(move || {
                     http::handle_connection(stream, |req| handle_request(req, &index));
