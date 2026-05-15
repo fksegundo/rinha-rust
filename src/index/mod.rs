@@ -1,6 +1,5 @@
 pub mod build;
 pub mod format;
-pub mod search;
 
 #[cfg(test)]
 mod tests;
