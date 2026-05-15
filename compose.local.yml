@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  api1:
+    image: ${APP_IMAGE:-rinha-rust-api:local}
+    build:
+      context: .
+      dockerfile: submission/Dockerfile
+    environment:
+      RINHA_FD_SOCKET: /sockets/api1.sock
+      RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
+    volumes:
+      - sockets:/sockets
+
+  api2:
+    image: ${APP_IMAGE:-rinha-rust-api:local}
+    build:
+      context: .
+      dockerfile: submission/Dockerfile
+    environment:
+      RINHA_FD_SOCKET: /sockets/api2.sock
+      RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
+    volumes:
+      - sockets:/sockets
+
+  lb:
+    image: ${LB_IMAGE:-rinha-lb:local}
+    ports:
+      - "9999:9999"
+    environment:
+      PORT: "9999"
+      FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
+      WORKERS: "2"
+    volumes:
+      - sockets:/sockets
+
+volumes:
+  sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=10m

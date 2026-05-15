@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  api1:
+    image: ${APP_IMAGE:-rinha-rust-api:local}
+    build:
+      context: .
+      dockerfile: submission/Dockerfile
+    environment:
+      RINHA_FD_SOCKET: /sockets/api1.sock
+      RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPU_LIMIT:-0.44}"
+          memory: "170M"
+  api2:
+    image: ${APP_IMAGE:-rinha-rust-api:local}
+    build:
+      context: .
+      dockerfile: submission/Dockerfile
+    environment:
+      RINHA_FD_SOCKET: /sockets/api2.sock
+      RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPU_LIMIT:-0.44}"
+          memory: "170M"
+  lb:
+    image: ${LB_IMAGE:-rinha-lb:local}
+    ports:
+      - "9999:9999"
+    environment:
+      PORT: "9999"
+      FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
+      WORKERS: "2"
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "${LB_CPU_LIMIT:-0.12}"
+          memory: "10M"
+    depends_on:
+      - api1
+      - api2
+
+volumes:
+  sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=10m
