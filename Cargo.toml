@@ -20,6 +20,8 @@ path = "bins/verify.rs"
 libc = "0.2"
 flate2 = "1.0"
 serde_json = "1.0"
+serde = { version = "1.0.228", features = ["derive"] }
+threadpool = "1.8.1"
 
 [profile.release]
 opt-level = 3

@@ -35,11 +35,14 @@ fn run_tcp_mode(index: Arc<SpecialistIndex>, bind_addr: &str) {
     let listener = TcpListener::bind(bind_addr)
         .unwrap_or_else(|e| panic!("failed to bind {}: {}", bind_addr, e));
 
+    let num_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let pool = threadpool::ThreadPool::new(num_threads);
+
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let index = Arc::clone(&index);
-                std::thread::spawn(move || {
+                pool.execute(move || {
                     http::handle_connection(stream, |req| handle_request(req, &index));
                 });
             }

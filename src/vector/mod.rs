@@ -7,6 +7,9 @@ pub enum ParseError {
     InvalidFormat,
 }
 
+use std::borrow::Cow;
+use serde::Deserialize;
+
 pub fn parse_query(payload: &[u8], out: &mut QueryVector) -> Result<(), ParseError> {
     out.fill(0);
 
@@ -22,8 +25,8 @@ pub fn parse_query(payload: &[u8], out: &mut QueryVector) -> Result<(), ParseErr
 
     out.fill(0);
 
-    // Fallback to unordered path
-    try_parse_unordered(payload, out)
+    // Fallback to serde path
+    try_parse_serde(payload, out)
 }
 
 #[inline]
@@ -208,76 +211,99 @@ fn try_parse_customer_first(json: &[u8], out: &mut QueryVector) -> Result<(), Pa
     Ok(())
 }
 
-// ─── Unordered Parse ─────────────────────────────────────────────────────────
+// ─── Serde Fallback Parse ────────────────────────────────────────────────────
 
-fn try_parse_unordered(json: &[u8], out: &mut QueryVector) -> Result<(), ParseError> {
-    let transaction = find_object(json, b"\"transaction\"").ok_or(ParseError::MissingField)?;
-    let customer = find_object(json, b"\"customer\"").ok_or(ParseError::MissingField)?;
-    let merchant = find_object(json, b"\"merchant\"").ok_or(ParseError::MissingField)?;
-    let terminal = find_object(json, b"\"terminal\"").ok_or(ParseError::MissingField)?;
-    let last_value = find_value_start(json, b"\"last_transaction\"", &mut 0)?;
+#[derive(Deserialize)]
+struct Payload<'a> {
+    #[serde(borrow)]
+    transaction: Transaction<'a>,
+    #[serde(borrow)]
+    customer: Customer<'a>,
+    #[serde(borrow)]
+    merchant: Merchant<'a>,
+    terminal: Terminal,
+    #[serde(default, borrow)]
+    last_transaction: Option<LastTransaction<'a>>,
+}
 
-    let mut known_hashes = [0u64; 64];
+#[derive(Deserialize)]
+struct Transaction<'a> {
+    amount: f64,
+    installments: i32,
+    #[serde(borrow)]
+    requested_at: Cow<'a, str>,
+}
 
-    let amount = read_double(transaction, b"\"amount\"").ok_or(ParseError::InvalidValue)?;
-    let installments =
-        read_int(transaction, b"\"installments\"").ok_or(ParseError::InvalidValue)?;
-    let requested_at =
-        read_string(transaction, b"\"requested_at\"").ok_or(ParseError::InvalidValue)?;
+#[derive(Deserialize)]
+struct Customer<'a> {
+    avg_amount: f64,
+    tx_count_24h: i32,
+    #[serde(borrow)]
+    known_merchants: Vec<Cow<'a, str>>,
+}
 
-    let customer_avg_amount =
-        read_double(customer, b"\"avg_amount\"").ok_or(ParseError::InvalidValue)?;
-    let tx_count_24h = read_int(customer, b"\"tx_count_24h\"").ok_or(ParseError::InvalidValue)?;
-    let known_count =
-        read_known_merchants(customer, &mut known_hashes).ok_or(ParseError::InvalidValue)?;
+#[derive(Deserialize)]
+struct Merchant<'a> {
+    #[serde(borrow)]
+    id: Cow<'a, str>,
+    #[serde(borrow)]
+    mcc: Cow<'a, str>,
+    avg_amount: f64,
+}
 
-    let merchant_id = read_string(merchant, b"\"id\"").ok_or(ParseError::InvalidValue)?;
-    let mcc = read_string(merchant, b"\"mcc\"").ok_or(ParseError::InvalidValue)?;
-    let merchant_avg_amount =
-        read_double(merchant, b"\"avg_amount\"").ok_or(ParseError::InvalidValue)?;
+#[derive(Deserialize)]
+struct Terminal {
+    is_online: bool,
+    card_present: bool,
+    km_from_home: f64,
+}
 
-    let is_online = read_bool(terminal, b"\"is_online\"").ok_or(ParseError::InvalidValue)?;
-    let card_present = read_bool(terminal, b"\"card_present\"").ok_or(ParseError::InvalidValue)?;
-    let km_from_home =
-        read_double(terminal, b"\"km_from_home\"").ok_or(ParseError::InvalidValue)?;
+#[derive(Deserialize)]
+struct LastTransaction<'a> {
+    #[serde(borrow)]
+    timestamp: Cow<'a, str>,
+    km_from_current: f64,
+}
 
-    let requested_parsed = parse_datetime(requested_at)?;
+fn try_parse_serde(payload: &[u8], out: &mut QueryVector) -> Result<(), ParseError> {
+    let parsed: Payload = serde_json::from_slice(payload).map_err(|_| ParseError::InvalidFormat)?;
+
+    let requested_parsed = parse_datetime(parsed.transaction.requested_at.as_bytes())?;
     let requested_minute = requested_parsed.epoch_minute;
 
-    out[0] = quantize(amount / 10_000.0);
-    out[1] = quantize(installments as f64 / 12.0);
+    out[0] = quantize(parsed.transaction.amount / 10_000.0);
+    out[1] = quantize(parsed.transaction.installments as f64 / 12.0);
     out[3] = quantize(requested_parsed.hour as f64 / 23.0);
     out[4] = quantize(requested_parsed.day_of_week as f64 / 6.0);
-    out[7] = quantize(km_from_home / 1_000.0);
-    out[8] = quantize(tx_count_24h as f64 / 20.0);
-    out[9] = if is_online { SCALE } else { 0 };
-    out[10] = if card_present { SCALE } else { 0 };
-    out[12] = quantize(mcc_risk(parse_mcc(mcc)));
-    out[13] = quantize(merchant_avg_amount / 10_000.0);
+    out[7] = quantize(parsed.terminal.km_from_home / 1_000.0);
+    out[8] = quantize(parsed.customer.tx_count_24h as f64 / 20.0);
+    out[9] = if parsed.terminal.is_online { SCALE } else { 0 };
+    out[10] = if parsed.terminal.card_present { SCALE } else { 0 };
+    out[12] = quantize(mcc_risk(parse_mcc(parsed.merchant.mcc.as_bytes())));
+    out[13] = quantize(parsed.merchant.avg_amount / 10_000.0);
 
-    if last_value < json.len() && json[last_value] == b'n' {
-        out[5] = -SCALE;
-        out[6] = -SCALE;
-    } else {
-        let last_transaction =
-            slice_object_at(json, last_value).ok_or(ParseError::InvalidFormat)?;
-        let last_timestamp =
-            read_string(last_transaction, b"\"timestamp\"").ok_or(ParseError::InvalidValue)?;
-        let last_km = read_double(last_transaction, b"\"km_from_current\"")
-            .ok_or(ParseError::InvalidValue)?;
-
-        let last_parsed = parse_datetime(last_timestamp)?;
+    if let Some(last_transaction) = parsed.last_transaction {
+        let last_parsed = parse_datetime(last_transaction.timestamp.as_bytes())?;
         let last_minute = last_parsed.epoch_minute;
         let minutes_diff = requested_minute.saturating_sub(last_minute);
         out[5] = quantize(minutes_diff as f64 / 1_440.0);
-        out[6] = quantize(last_km / 1_000.0);
+        out[6] = quantize(last_transaction.km_from_current / 1_000.0);
+    } else {
+        out[5] = -SCALE;
+        out[6] = -SCALE;
+    }
+
+    let mut known_hashes = [0u64; 64];
+    let known_count = std::cmp::min(parsed.customer.known_merchants.len(), 64);
+    for i in 0..known_count {
+        known_hashes[i] = hash_bytes(parsed.customer.known_merchants[i].as_bytes());
     }
 
     finish_vector(
         out,
-        amount,
-        customer_avg_amount,
-        hash_bytes(merchant_id),
+        parsed.transaction.amount,
+        parsed.customer.avg_amount,
+        hash_bytes(parsed.merchant.id.as_bytes()),
         &known_hashes[..known_count],
     );
     Ok(())

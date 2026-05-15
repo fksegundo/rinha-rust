@@ -122,6 +122,9 @@ pub fn handle_connection<F>(mut stream: TcpStream, mut handler: F)
 where
     F: FnMut(&Request) -> &'static [u8],
 {
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(5000)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(5000)));
+
     let mut buf = [0u8; 8192];
     let mut used = 0usize;
     loop {
