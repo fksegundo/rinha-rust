@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   api1:
-    image: ghcr.io/fksegundo/rinha-rust-api:sha-7586732
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
       RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
@@ -14,7 +14,7 @@ services:
           cpus: "0.42"
           memory: "165M"
   api2:
-    image: ghcr.io/fksegundo/rinha-rust-api:sha-7586732
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
       RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
