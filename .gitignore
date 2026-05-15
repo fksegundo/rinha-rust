@@ -1,4 +1,4 @@
 target/
 test/
-docs/
 tmp/*.idx
+__pycache__/

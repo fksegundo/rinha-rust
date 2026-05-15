@@ -10,6 +10,7 @@ on:
       - '.github/workflows/publish-image.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'build.rs'
       - 'submission/Dockerfile'
   workflow_dispatch:
 

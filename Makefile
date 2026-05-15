@@ -14,9 +14,14 @@ EXTENDED_TEST_DATA_FILE ?= $(RESULTS_DIR)/extended-test-data.json
 RINHA_K6_TARGET_RATE ?= 900
 RINHA_K6_DURATION ?= 120s
 RINHA_K6_MAX_VUS ?= 250
-RINHA_NATIVE_LEAF_SIZE ?= 64
+RINHA_NATIVE_LEAF_SIZE ?= 48
+RINHA_NATIVE_SCALE ?= 10000
 RINHA_MAX_LEAF_VISITS ?= 0
 RINHA_SEARCH_MODE ?= key-first
+API_CPU_LIMIT ?= 0.42
+LB_CPU_LIMIT ?= 0.16
+API_MEMORY_LIMIT ?= 165M
+LB_MEMORY_LIMIT ?= 20M
 
 help:
 	@echo "Targets:"
@@ -34,6 +39,7 @@ help:
 build:
 	@docker build \
 		--build-arg RINHA_NATIVE_LEAF_SIZE=$(RINHA_NATIVE_LEAF_SIZE) \
+		--build-arg RINHA_NATIVE_SCALE=$(RINHA_NATIVE_SCALE) \
 		-f submission/Dockerfile \
 		-t $(APP_IMAGE) .
 
@@ -41,7 +47,7 @@ build-lb:
 	@docker build -f $(LB_DIR)/Dockerfile -t $(LB_IMAGE) $(LB_DIR)
 
 up:
-	@APP_IMAGE=$(APP_IMAGE) LB_IMAGE=$(LB_IMAGE) RINHA_MAX_LEAF_VISITS=$(RINHA_MAX_LEAF_VISITS) RINHA_SEARCH_MODE=$(RINHA_SEARCH_MODE) $(COMPOSE) up -d --force-recreate
+	@APP_IMAGE=$(APP_IMAGE) LB_IMAGE=$(LB_IMAGE) RINHA_MAX_LEAF_VISITS=$(RINHA_MAX_LEAF_VISITS) RINHA_SEARCH_MODE=$(RINHA_SEARCH_MODE) API_CPU_LIMIT=$(API_CPU_LIMIT) LB_CPU_LIMIT=$(LB_CPU_LIMIT) API_MEMORY_LIMIT=$(API_MEMORY_LIMIT) LB_MEMORY_LIMIT=$(LB_MEMORY_LIMIT) $(COMPOSE) up -d --force-recreate
 	@echo "Waiting for /ready..."
 	@for i in $$(seq 1 60); do \
 		if curl -sf http://localhost:9999/ready >/dev/null; then echo "ready"; exit 0; fi; \
@@ -74,7 +80,7 @@ test-k6: clean-results
 		-v "$(PWD)/$(RESULTS_DIR):/test" \
 		-w / \
 		$(K6_IMAGE) \
-		run --summary-trend-stats="p(99)" /scripts/test.js
+		run --summary-trend-stats="p(50),p(95),p(99)" /scripts/test.js
 	@cat $(RESULTS_DIR)/results.json
 
 generate-extended:

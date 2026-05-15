@@ -1,169 +1,100 @@
-# Rinha de Backend 2026 — Rust Submission
+# Rinha de Backend 2026 - Rust low-latency fraud scoring
 
-Implementation for the [Rinha de Backend 2026](https://github.com/zanfranceschi/rinha-de-backend-2026) challenge.
+[![Rust CI](https://github.com/fksegundo/rinha-rust/actions/workflows/rust-ci.yml/badge.svg)](https://github.com/fksegundo/rinha-rust/actions/workflows/rust-ci.yml)
+[![Build image](https://github.com/fksegundo/rinha-rust/actions/workflows/publish-image.yml/badge.svg)](https://github.com/fksegundo/rinha-rust/actions/workflows/publish-image.yml)
+[![GHCR image](https://img.shields.io/badge/GHCR-rinha--rust--api-blue)](https://github.com/fksegundo/rinha-rust/pkgs/container/rinha-rust-api)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
----
+Rust implementation for the [Rinha de Backend 2026](https://github.com/zanfranceschi/rinha-de-backend-2026) challenge. The repository is structured as a low-latency architecture case study: image-time preprocessing, mmap startup, a specialist exact kNN index, a custom load balancer, and Unix-socket FD passing.
 
-## About
+## Performance notes
 
-This is a fully **Rust** submission that detects fraud score vectors via **exact k-NN search** (`k = 5`, Euclidean distance) over a pre-built specialist-partitioned index. The index is built at Docker image build time and `mmap`-loaded at startup so the API reaches readiness immediately.
+Latest local benchmark, using the official k6 dataset and the compose topology from this repository:
 
-- **Language:** Rust
-- **Algorithm:** Exact k-NN with specialist partitioning (exact-safe pruning)
-- **Protocol:** HTTP/1.1 with keep-alive, plus Unix-socket FD passing via SCM_RIGHTS
-- **Topology:** 1 load balancer (`rinha-dotnetrust-lb`) → 2 Rust API instances
+| Metric | Result |
+| --- | --- |
+| p99 local | `0.61ms` |
+| score | `6000` |
+| false positives | `0` |
+| false negatives | `0` |
+| HTTP errors | `0` |
+| environment | local Docker Compose, `900 rps`, `120s`, `250 max VUs` |
+| resources | `2 x API: 0.42 CPU / 165M`, `LB: 0.16 CPU / 20M` |
+| strategy | build-time specialist index, `mmap`, `scale=10000`, `leaf_size=48`, `key-first` exact kNN search, FD passing |
 
----
-
-## Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/ready` | Readiness probe |
-| `POST` | `/fraud-score` | Accepts a JSON payload and returns the fraud count (`0..5`) |
-
----
-
-## Project Structure
-
-```
-.
-├── bins/               # Binary entrypoints (api, preprocess, verify)
-├── src/
-│   ├── api/            # HTTP server and request routing
-│   ├── fd_passing/     # SCM_RIGHTS file-descriptor passing
-│   ├── http/           # Minimal HTTP/1.1 parser
-│   ├── index/          # Specialist index builder and mmap loader
-│   └── vector/         # JSON payload → normalized i16 vector
-├── submission/
-│   ├── Dockerfile      # Multi-stage build (compile → preprocess → runtime)
-│   └── docker-compose.yml # Official topology
-├── Makefile            # Local build, benchmark and diagnostic targets
-└── info.json           # Participant metadata
-```
-
----
-
-## Local Build & Test
-
-Requirements: Docker, Docker Compose, curl, k6 (for tests)
+The benchmark command is intentionally based on the official/default dataset:
 
 ```bash
-# Build the API image locally
-make build
-
-# Build the LB image (expects ../rinha-dotnetrust-lb)
-make build-lb
-
-# Start the full stack
-make up
-
-# Run official k6 workload
-make test-k6
-
-# Full benchmark (build, run, test, teardown)
 make bench-local
 ```
 
----
+`make test-k6` fails fast if the standard dataset is missing at `../rinha-de-backend-2026-main/test/test-data.json`. Extended datasets exist only for local robustness checks and do not replace the official benchmark flow.
 
-## Docker Image
+## Architecture deep dive
 
-The image is published automatically to GitHub Container Registry via the included GitHub Action.
+```text
+client -> LB -> fd passing -> api1/api2 -> mmap index -> exact kNN
+```
+
+The API does exact kNN with `k=5` over quantized vectors. The Docker image builds the index ahead of time from the official references file, then the runtime process memory maps that index at startup. The custom LB accepts external HTTP traffic and forwards accepted sockets to API workers through Unix socket descriptor passing, keeping the hot path small.
+
+More detail:
+
+- [Architecture deep dive](docs/architecture.md)
+- [Performance notes and benchmark matrix](docs/performance.md)
+
+## Benchmark workflow
+
+Requirements: Docker, Docker Compose, curl, Python 3, and access to the official challenge checkout at `../rinha-de-backend-2026-main`.
+
+```bash
+make build        # Build local API image with preprocess step
+make build-lb     # Build the custom LB image from ../rinha-dotnetrust-lb
+make up           # Start the full local topology on :9999
+make test-k6      # Run the official k6 dataset against the running stack
+make bench-local  # Build, start, run official k6, and tear down
+make bench-diag   # Same benchmark plus API logs and docker stats
+```
+
+Tuning helpers:
+
+```bash
+python3 scripts/run_scale_leaf_matrix.py
+python3 scripts/run_resource_matrix.py --scale 10000 --leaf-size 48 --phase cpu
+```
+
+The default build uses:
+
+- `RINHA_NATIVE_SCALE=10000`
+- `RINHA_NATIVE_LEAF_SIZE=48`
+- `RINHA_SEARCH_MODE=key-first`
+- `API_CPU_LIMIT=0.42`, `LB_CPU_LIMIT=0.16`
+- `API_MEMORY_LIMIT=165M`, `LB_MEMORY_LIMIT=20M`
+
+## Project layout
+
+```text
+bins/                 binary entrypoints: api, preprocess, verify
+src/api/              HTTP server and request routing
+src/fd_passing/       SCM_RIGHTS file descriptor passing
+src/http/             minimal HTTP/1.1 parsing and fixed responses
+src/index/            specialist index builder, mmap loader, exact kNN search
+src/vector/           JSON payload to quantized vector parsing
+submission/           Dockerfile and official compose topology
+scripts/              benchmark and tuning helpers
+docs/                 architecture and performance notes
+```
+
+## Submission branch
+
+`main` keeps the implementation and documentation. The `submission` branch is reserved for the official challenge handoff shape, with the submission files at the repository root and public GHCR image references.
+
+Published API image:
 
 ```bash
 docker pull ghcr.io/fksegundo/rinha-rust-api:latest
 ```
-
----
 
 ## License
-
-MIT
-
----
-
----
-
-# Rinha de Backend 2026 — Submissão em Rust
-
-Implementação para o desafio [Rinha de Backend 2026](https://github.com/zanfranceschi/rinha-de-backend-2026).
-
----
-
-## Sobre
-
-Esta é uma submissão 100% **Rust** que detecta vetores de fraude via **busca exata k-NN** (`k = 5`, distância Euclidiana) sobre um índice especialista pré-construído. O índice é gerado no build da imagem Docker e carregado via `mmap` no startup, para que a API fique pronta instantaneamente.
-
-- **Linguagem:** Rust
-- **Algoritmo:** k-NN exato com particionamento especialista (poda exact-safe)
-- **Protocolo:** HTTP/1.1 com keep-alive, e repasse de FD via Unix sockets (SCM_RIGHTS)
-- **Topologia:** 1 load balancer (`rinha-dotnetrust-lb`) → 2 instâncias Rust
-
----
-
-## Endpoints
-
-| Método | Caminho | Descrição |
-|--------|---------|-----------|
-| `GET`  | `/ready` | Probe de readiness |
-| `POST` | `/fraud-score` | Recebe JSON e retorna a contagem de fraudes (`0..5`) |
-
----
-
-## Estrutura do Projeto
-
-```
-.
-├── bins/               # Entrypoints dos binários (api, preprocess, verify)
-├── src/
-│   ├── api/            # Servidor HTTP e roteamento
-│   ├── fd_passing/     # Repasse de FD via SCM_RIGHTS
-│   ├── http/           # Parser HTTP/1.1 mínimo
-│   ├── index/          # Construtor e loader mmap do índice especialista
-│   └── vector/         # Payload JSON → vetor i16 normalizado
-├── submission/
-│   ├── Dockerfile      # Build multi-stage (compila → preprocess → runtime)
-│   └── docker-compose.yml # Topologia oficial
-├── Makefile            # Targets de build local, benchmark e diagnóstico
-└── info.json           # Metadados do participante
-```
-
----
-
-## Build e Teste Local
-
-Requisitos: Docker, Docker Compose, curl, k6 (para testes)
-
-```bash
-# Build da imagem da API localmente
-make build
-
-# Build da imagem do LB (espera ../rinha-dotnetrust-lb)
-make build-lb
-
-# Iniciar a stack completa
-make up
-
-# Rodar workload oficial do k6
-make test-k6
-
-# Benchmark completo (build, run, test, teardown)
-make bench-local
-```
-
----
-
-## Imagem Docker
-
-A imagem é publicada automaticamente no GitHub Container Registry pela GitHub Action inclusa.
-
-```bash
-docker pull ghcr.io/fksegundo/rinha-rust-api:latest
-```
-
----
-
-## Licença
 
 MIT

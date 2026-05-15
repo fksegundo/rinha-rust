@@ -2,11 +2,13 @@
 FROM rust:bookworm AS build
 
 ARG RUST_TARGET_CPU=haswell
+ARG RINHA_NATIVE_SCALE=10000
 ENV RUSTFLAGS="-C target-cpu=${RUST_TARGET_CPU} -C panic=abort -C link-arg=-Wl,--gc-sections"
+ENV RINHA_NATIVE_SCALE=${RINHA_NATIVE_SCALE}
 
 WORKDIR /app
 
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock build.rs ./
 COPY src ./src
 COPY bins ./bins
 
@@ -20,7 +22,7 @@ COPY --from=build /app/target/release/preprocess /app/preprocess
 COPY --from=build /app/target/release/api /app/api
 
 ARG REFERENCES_URL=https://github.com/zanfranceschi/rinha-de-backend-2026/raw/main/resources/references.json.gz
-ARG RINHA_NATIVE_LEAF_SIZE=64
+ARG RINHA_NATIVE_LEAF_SIZE=48
 RUN curl -L -o /app/references.json.gz ${REFERENCES_URL}
 
 RUN mkdir -p /app/index && \

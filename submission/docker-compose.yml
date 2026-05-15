@@ -14,8 +14,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "${API_CPU_LIMIT:-0.44}"
-          memory: "170M"
+          cpus: "${API_CPU_LIMIT:-0.42}"
+          memory: "${API_MEMORY_LIMIT:-165M}"
   api2:
     image: ${APP_IMAGE:-rinha-rust-api:local}
     build:
@@ -29,8 +29,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "${API_CPU_LIMIT:-0.44}"
-          memory: "170M"
+          cpus: "${API_CPU_LIMIT:-0.42}"
+          memory: "${API_MEMORY_LIMIT:-165M}"
   lb:
     image: ${LB_IMAGE:-rinha-lb:local}
     ports:
@@ -44,8 +44,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "${LB_CPU_LIMIT:-0.12}"
-          memory: "10M"
+          cpus: "${LB_CPU_LIMIT:-0.16}"
+          memory: "${LB_MEMORY_LIMIT:-20M}"
     depends_on:
       - api1
       - api2
