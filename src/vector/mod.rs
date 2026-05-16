@@ -421,7 +421,6 @@ fn find_and_read_known_merchants(
     Ok(count)
 }
 
-
 fn read_double_at(json: &[u8], start: usize) -> Result<f64, ParseError> {
     let s = &json[start..];
     let mut end = 0usize;
@@ -508,7 +507,6 @@ fn read_string_at<'a>(json: &'a [u8], start: usize) -> Result<&'a [u8], ParseErr
     Err(ParseError::InvalidValue)
 }
 
-
 fn is_json_whitespace(b: u8) -> bool {
     matches!(b, b' ' | b'\n' | b'\r' | b'\t')
 }
@@ -520,7 +518,7 @@ fn hash_bytes(value: &[u8]) -> u64 {
     let mut hash = 0x517cc1b727220a95u64;
     let mut i = 0;
     while i + 8 <= value.len() {
-        let word = u64::from_le_bytes(value[i..i+8].try_into().unwrap());
+        let word = u64::from_le_bytes(value[i..i + 8].try_into().unwrap());
         hash = hash.rotate_left(5) ^ word;
         hash = hash.wrapping_mul(0x517cc1b727220a95);
         i += 8;

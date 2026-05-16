@@ -16,7 +16,7 @@ where
         }
     };
     let handler = Arc::new(handler);
-    
+
     let pool = threadpool::Builder::new()
         .num_threads(512)
         .thread_stack_size(256 * 1024)
