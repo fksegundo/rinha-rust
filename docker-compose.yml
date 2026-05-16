@@ -2,7 +2,7 @@ version: "3.9"
 
 services:
   api1:
-    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    image: ghcr.io/fksegundo/rinha-rust-api:sha-323beca
     pull_policy: always
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
@@ -15,7 +15,7 @@ services:
           cpus: "0.42"
           memory: "165M"
   api2:
-    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    image: ghcr.io/fksegundo/rinha-rust-api:sha-323beca
     pull_policy: always
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
