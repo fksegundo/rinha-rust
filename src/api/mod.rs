@@ -35,10 +35,10 @@ fn run_tcp_mode(index: Arc<SpecialistIndex>, bind_addr: &str) {
     let listener = TcpListener::bind(bind_addr)
         .unwrap_or_else(|e| panic!("failed to bind {}: {}", bind_addr, e));
 
-    let num_threads = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4);
-    let pool = threadpool::ThreadPool::new(num_threads * 64);
+    let pool = threadpool::Builder::new()
+        .num_threads(512)
+        .thread_stack_size(256 * 1024)
+        .build();
 
     for stream in listener.incoming() {
         match stream {
