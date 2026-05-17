@@ -619,30 +619,47 @@ fn scan_block_avx2(vectors: &[i16], block_base: usize, query: &QueryVector) -> [
         use std::arch::x86_64::*;
         let mut sum64_lo = _mm256_setzero_si256();
         let mut sum64_hi = _mm256_setzero_si256();
-        let mut sum32 = _mm256_setzero_si256();
 
-        for d in 0..DIMS {
-            let q_vec = _mm_set1_epi16(query[d]);
-            let v_ptr = vectors.as_ptr().add(block_base + d * LANES);
-            let v_vec = _mm_loadu_si128(v_ptr as *const __m128i);
-            let diff = _mm_sub_epi16(q_vec, v_vec);
-            let diff32 = _mm256_cvtepi16_epi32(diff);
-            let sq = _mm256_mullo_epi32(diff32, diff32);
-            sum32 = _mm256_add_epi32(sum32, sq);
+        let mut sum32_lo = _mm_setzero_si128();
+        let mut sum32_hi = _mm_setzero_si128();
 
-            if (d + 1) % 4 == 0 {
-                let lo = _mm256_cvtepi32_epi64(_mm256_castsi256_si128(sum32));
-                let hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(sum32, 1));
-                sum64_lo = _mm256_add_epi64(sum64_lo, lo);
-                sum64_hi = _mm256_add_epi64(sum64_hi, hi);
-                sum32 = _mm256_setzero_si256();
+        for d in (0..DIMS).step_by(2) {
+            let q_d = _mm_set1_epi16(query[d]);
+            let q_d1 = _mm_set1_epi16(query[d + 1]);
+
+            let v_ptr_d = vectors.as_ptr().add(block_base + d * LANES);
+            let v_ptr_d1 = vectors.as_ptr().add(block_base + (d + 1) * LANES);
+
+            let v_d = _mm_loadu_si128(v_ptr_d as *const __m128i);
+            let v_d1 = _mm_loadu_si128(v_ptr_d1 as *const __m128i);
+
+            let diff_d = _mm_sub_epi16(q_d, v_d);
+            let diff_d1 = _mm_sub_epi16(q_d1, v_d1);
+
+            let lo = _mm_unpacklo_epi16(diff_d, diff_d1);
+            let hi = _mm_unpackhi_epi16(diff_d, diff_d1);
+
+            let sq_lo = _mm_madd_epi16(lo, lo);
+            let sq_hi = _mm_madd_epi16(hi, hi);
+
+            sum32_lo = _mm_add_epi32(sum32_lo, sq_lo);
+            sum32_hi = _mm_add_epi32(sum32_hi, sq_hi);
+
+            if (d + 2) % 4 == 0 {
+                let lo_64 = _mm256_cvtepi32_epi64(sum32_lo);
+                let hi_64 = _mm256_cvtepi32_epi64(sum32_hi);
+                sum64_lo = _mm256_add_epi64(sum64_lo, lo_64);
+                sum64_hi = _mm256_add_epi64(sum64_hi, hi_64);
+
+                sum32_lo = _mm_setzero_si128();
+                sum32_hi = _mm_setzero_si128();
             }
         }
 
-        let lo = _mm256_cvtepi32_epi64(_mm256_castsi256_si128(sum32));
-        let hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(sum32, 1));
-        sum64_lo = _mm256_add_epi64(sum64_lo, lo);
-        sum64_hi = _mm256_add_epi64(sum64_hi, hi);
+        let lo_64 = _mm256_cvtepi32_epi64(sum32_lo);
+        let hi_64 = _mm256_cvtepi32_epi64(sum32_hi);
+        sum64_lo = _mm256_add_epi64(sum64_lo, lo_64);
+        sum64_hi = _mm256_add_epi64(sum64_hi, hi_64);
 
         let mut block_dists = [0i64; LANES];
         _mm256_storeu_si256(block_dists.as_mut_ptr() as *mut __m256i, sum64_lo);

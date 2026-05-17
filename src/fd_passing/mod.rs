@@ -16,6 +16,10 @@ where
         }
     };
     let handler = Arc::new(handler);
+    let pool = threadpool::Builder::new()
+        .num_threads(512)
+        .thread_stack_size(256 * 1024)
+        .build();
 
     for stream in listener.incoming() {
         match stream {
@@ -27,12 +31,9 @@ where
                 let tcp = unsafe { TcpStream::from_raw_fd(fd) };
                 let _ = tcp.set_nodelay(true);
                 let handler = Arc::clone(&handler);
-                std::thread::Builder::new()
-                    .stack_size(256 * 1024)
-                    .spawn(move || {
-                        handler(tcp);
-                    })
-                    .expect("failed to spawn fd handler thread");
+                pool.execute(move || {
+                    handler(tcp);
+                });
             }
             Err(e) => {
                 eprintln!("fd accept error: {}", e);

@@ -30,7 +30,7 @@ services:
     environment:
       PORT: "9999"
       FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
-      WORKERS: "2"
+      WORKERS: "${LB_WORKERS:-2}"
     volumes:
       - sockets:/sockets
 
