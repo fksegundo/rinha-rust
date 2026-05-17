@@ -28,7 +28,7 @@ services:
           cpus: "0.42"
           memory: "165M"
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:latest
+    image: ghcr.io/fksegundo/rinha-api-lb:sha-0c6f3b2
     pull_policy: always
     ports:
       - "9999:9999"
