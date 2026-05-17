@@ -1,6 +1,8 @@
 use crate::http;
 use crate::index::SpecialistIndex;
+use crate::runtime;
 use crate::vector;
+use crate::{PACKED_DIMS, SCALE};
 use std::net::TcpListener;
 use std::sync::Arc;
 
@@ -10,11 +12,7 @@ pub fn run(index_path: &str, bind_addr: &str, fd_socket: Option<&str>) {
             .unwrap_or_else(|e| panic!("failed to open index '{}': {}", index_path, e)),
     );
 
-    // Warm up
-    {
-        let warm_query = [0i16; 16];
-        let _ = index.predict_fraud_count(&warm_query);
-    }
+    warm_up_index(&index);
 
     if let Some(socket_path) = fd_socket {
         run_fd_mode(index, socket_path);
@@ -53,6 +51,23 @@ fn run_tcp_mode(index: Arc<SpecialistIndex>, bind_addr: &str) {
                 eprintln!("accept error: {}", e);
             }
         }
+    }
+}
+
+fn warm_up_index(index: &SpecialistIndex) {
+    let count = runtime::warmup_queries();
+    let scale = SCALE as usize;
+    for i in 0..count {
+        let mut query = [0i16; PACKED_DIMS];
+        for (dim, value) in query.iter_mut().enumerate() {
+            let raw = ((i * 313 + dim * 1009) % (scale + 1)) as i16;
+            *value = if (dim == 5 || dim == 6) && i % 4 == 0 {
+                -(SCALE as i16)
+            } else {
+                raw
+            };
+        }
+        let _ = index.predict_fraud_count(&query);
     }
 }
 

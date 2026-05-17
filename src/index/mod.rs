@@ -70,17 +70,24 @@ impl MmapRegion {
             return Err("empty file".to_string());
         }
         unsafe {
+            let mut flags = libc::MAP_PRIVATE;
+            #[cfg(target_os = "linux")]
+            {
+                flags |= libc::MAP_POPULATE;
+            }
+
             let ptr = libc::mmap(
                 ptr::null_mut(),
                 len,
                 libc::PROT_READ,
-                libc::MAP_PRIVATE,
+                flags,
                 file.as_raw_fd(),
                 0,
             );
             if ptr == libc::MAP_FAILED {
                 return Err(std::io::Error::last_os_error().to_string());
             }
+            advise_mapping(ptr, len);
             Ok(Self {
                 ptr: ptr.cast::<u8>(),
                 len,
@@ -92,6 +99,17 @@ impl MmapRegion {
         unsafe { slice::from_raw_parts(self.ptr.cast_const(), self.len) }
     }
 }
+
+#[cfg(target_os = "linux")]
+unsafe fn advise_mapping(ptr: *mut libc::c_void, len: usize) {
+    unsafe {
+        libc::madvise(ptr, len, libc::MADV_WILLNEED);
+        libc::madvise(ptr, len, libc::MADV_HUGEPAGE);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+unsafe fn advise_mapping(_ptr: *mut libc::c_void, _len: usize) {}
 
 impl Drop for MmapRegion {
     fn drop(&mut self) {

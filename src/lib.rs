@@ -2,6 +2,7 @@ pub mod api;
 pub mod fd_passing;
 pub mod http;
 pub mod index;
+pub mod runtime;
 pub mod vector;
 
 pub const DIMS: usize = 14;
