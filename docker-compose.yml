@@ -12,7 +12,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.40"
+          cpus: "0.42"
           memory: "165M"
   api2:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
@@ -25,10 +25,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.40"
+          cpus: "0.42"
           memory: "165M"
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:sha-0c6f3b2
+    image: ghcr.io/fksegundo/rinha-api-lb:latest
     pull_policy: always
     ports:
       - "9999:9999"
@@ -41,7 +41,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.20"
+          cpus: "0.16"
           memory: "20M"
     depends_on:
       - api1
