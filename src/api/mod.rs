@@ -12,29 +12,42 @@ pub fn run(index_path: &str, bind_addr: &str, fd_socket: Option<&str>) {
             .unwrap_or_else(|e| panic!("failed to open index '{}': {}", index_path, e)),
     );
 
+    if std::env::var("RINHA_MLOCK_INDEX").as_deref() == Ok("1") {
+        index.mlock_all();
+    }
+
     warm_up_index(&index);
 
+    let pool_size = thread_pool_size();
+
     if let Some(socket_path) = fd_socket {
-        run_fd_mode(index, socket_path);
+        run_fd_mode(index, socket_path, pool_size);
     } else {
-        run_tcp_mode(index, bind_addr);
+        run_tcp_mode(index, bind_addr, pool_size);
     }
 }
 
-fn run_fd_mode(index: Arc<SpecialistIndex>, socket_path: &str) {
+fn thread_pool_size() -> usize {
+    std::env::var("RINHA_THREAD_POOL_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(512)
+}
+
+fn run_fd_mode(index: Arc<SpecialistIndex>, socket_path: &str, pool_size: usize) {
     use crate::fd_passing;
-    fd_passing::run_fd_server(socket_path, move |stream| {
+    fd_passing::run_fd_server(socket_path, pool_size, move |stream| {
         let index = Arc::clone(&index);
         http::handle_connection(stream, |req| handle_request(req, &index));
     });
 }
 
-fn run_tcp_mode(index: Arc<SpecialistIndex>, bind_addr: &str) {
+fn run_tcp_mode(index: Arc<SpecialistIndex>, bind_addr: &str, pool_size: usize) {
     let listener = TcpListener::bind(bind_addr)
         .unwrap_or_else(|e| panic!("failed to bind {}: {}", bind_addr, e));
 
     let pool = threadpool::Builder::new()
-        .num_threads(512)
+        .num_threads(pool_size)
         .thread_stack_size(256 * 1024)
         .build();
 

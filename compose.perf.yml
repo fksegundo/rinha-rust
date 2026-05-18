@@ -2,10 +2,10 @@ version: "3.9"
 
 services:
   api1:
-    image: ${APP_IMAGE:-rinha-rust-api:local}
+    image: ${APP_PERF_IMAGE:-rinha-rust-api:perf}
     build:
       context: .
-      dockerfile: submission/Dockerfile
+      dockerfile: submission/Dockerfile.perf
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
       RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
@@ -18,12 +18,17 @@ services:
       - ${API_CAP_IPC_LOCK:-}
     ulimits:
       memlock: ${API_MEMLOCK_ULIMIT:--1}
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPU_LIMIT:-0.42}"
+          memory: "${API_MEMORY_LIMIT:-165M}"
 
   api2:
-    image: ${APP_IMAGE:-rinha-rust-api:local}
+    image: ${APP_PERF_IMAGE:-rinha-rust-api:perf}
     build:
       context: .
-      dockerfile: submission/Dockerfile
+      dockerfile: submission/Dockerfile.perf
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
       RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
@@ -36,9 +41,14 @@ services:
       - ${API_CAP_IPC_LOCK:-}
     ulimits:
       memlock: ${API_MEMLOCK_ULIMIT:--1}
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPU_LIMIT:-0.42}"
+          memory: "${API_MEMORY_LIMIT:-165M}"
 
   lb:
-    image: ${LB_IMAGE:-rinha-lb:local}
+    image: ${LB_PERF_IMAGE:-rinha-lb:perf}
     ports:
       - "9999:9999"
     environment:
@@ -50,6 +60,14 @@ services:
     volumes:
       - sockets:/sockets
     cpuset: "${LB_CPUSET:-}"
+    deploy:
+      resources:
+        limits:
+          cpus: "${LB_CPU_LIMIT:-0.16}"
+          memory: "${LB_MEMORY_LIMIT:-20M}"
+    depends_on:
+      - api1
+      - api2
 
 volumes:
   sockets:

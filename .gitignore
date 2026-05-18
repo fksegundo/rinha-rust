@@ -2,3 +2,4 @@ target/
 test/
 tmp/*.idx
 __pycache__/
+privatedocs/

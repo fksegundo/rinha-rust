@@ -271,6 +271,23 @@ impl SpecialistIndex {
         }
     }
 
+    pub fn mlock_all(&self) {
+        #[cfg(target_os = "linux")]
+        unsafe {
+            let ptr = self._mapping.ptr as *mut libc::c_void;
+            let len = self._mapping.len;
+            if libc::mlock(ptr, len) != 0 {
+                eprintln!(
+                    "mlock({} bytes) failed: {}",
+                    len,
+                    std::io::Error::last_os_error()
+                );
+            } else {
+                eprintln!("mlock({} bytes) succeeded", len);
+            }
+        }
+    }
+
     fn predict_fraud_count_inner(
         &self,
         query: &QueryVector,

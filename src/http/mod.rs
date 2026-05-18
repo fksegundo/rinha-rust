@@ -64,7 +64,15 @@ pub fn parse_request(buf: &[u8]) -> Option<(Request<'_>, usize)> {
 }
 
 fn find_header_end(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+    let n = buf.len();
+    let mut i = 3;
+    while i < n {
+        if buf[i] == b'\n' && buf[i - 1] == b'\r' && buf[i - 2] == b'\n' && buf[i - 3] == b'\r' {
+            return Some(i + 1);
+        }
+        i += 1;
+    }
+    None
 }
 
 fn parse_first_line(buf: &[u8]) -> Option<(Method, (usize, usize), usize)> {
@@ -91,25 +99,33 @@ fn parse_first_line(buf: &[u8]) -> Option<(Method, (usize, usize), usize)> {
 }
 
 fn find_content_length(headers: &[u8]) -> usize {
-    let needle = b"Content-Length:";
-    for window in headers.windows(needle.len()) {
-        if window.eq_ignore_ascii_case(needle) {
-            let start = window.as_ptr() as usize - headers.as_ptr() as usize + needle.len();
-            let rest = &headers[start..];
-            let val_start = rest.iter().position(|&b| !is_ws(b)).unwrap_or(0);
-            let val_end = rest[val_start..]
-                .iter()
-                .position(|&b| b == b'\r' || is_ws(b))
-                .unwrap_or(rest.len() - val_start);
-            let mut n = 0usize;
-            for &b in &rest[val_start..val_start + val_end] {
-                if !b.is_ascii_digit() {
-                    return 0;
+    const NEEDLE: &[u8] = b"content-length:";
+    let n = headers.len();
+    if n < NEEDLE.len() {
+        return 0;
+    }
+    let mut i = 0;
+    while i + NEEDLE.len() <= n {
+        if headers[i].to_ascii_lowercase() == b'c' {
+            let window = &headers[i..i + NEEDLE.len()];
+            if window.eq_ignore_ascii_case(NEEDLE) {
+                let rest = &headers[i + NEEDLE.len()..];
+                let val_start = rest.iter().position(|&b| !is_ws(b)).unwrap_or(0);
+                let val_end = rest[val_start..]
+                    .iter()
+                    .position(|&b| b == b'\r' || is_ws(b))
+                    .unwrap_or(rest.len() - val_start);
+                let mut num = 0usize;
+                for &b in &rest[val_start..val_start + val_end] {
+                    if !b.is_ascii_digit() {
+                        return 0;
+                    }
+                    num = num.saturating_mul(10).saturating_add((b - b'0') as usize);
                 }
-                n = n.saturating_mul(10).saturating_add((b - b'0') as usize);
+                return num;
             }
-            return n;
         }
+        i += 1;
     }
     0
 }
@@ -122,9 +138,6 @@ pub fn handle_connection<F>(mut stream: TcpStream, mut handler: F)
 where
     F: FnMut(&Request) -> &'static [u8],
 {
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(5000)));
-    let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(5000)));
-
     let mut buf = [0u8; 8192];
     let mut used = 0usize;
     loop {

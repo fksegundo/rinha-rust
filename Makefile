@@ -1,8 +1,10 @@
-.PHONY: help build build-lb up down logs test-k6 generate-extended test-k6-extended bench-local bench-extended clean-results
+.PHONY: help build build-perf build-lb build-lb-perf up up-perf down logs test-k6 generate-extended test-k6-extended bench-local bench-perf bench-extended clean-results
 
 COMPOSE ?= docker compose -f submission/docker-compose.yml -f compose.local.yml
 APP_IMAGE ?= rinha-rust-api:local
+APP_PERF_IMAGE ?= rinha-rust-api:perf
 LB_IMAGE ?= rinha-lb:local
+LB_PERF_IMAGE ?= rinha-lb:perf
 K6_IMAGE ?= grafana/k6:latest
 LB_DIR ?= ../rinha-dotnetrust-lb
 OFFICIAL_TEST_DIR ?= ../rinha-de-backend-2026-main/test
@@ -23,17 +25,30 @@ LB_CPU_LIMIT ?= 0.16
 API_MEMORY_LIMIT ?= 165M
 LB_MEMORY_LIMIT ?= 20M
 LB_WORKERS ?= 2
+API_THREAD_POOL_SIZE ?= 32
+RINHA_MLOCK_INDEX ?= 0
+API1_CPUSET ?=
+API2_CPUSET ?=
+LB_CPUSET ?=
+LB_SO_INCOMING_CPU ?= 0
+LB_CPU_AFFINITY ?=
+API_CAP_IPC_LOCK ?=
+API_MEMLOCK_ULIMIT ?= -1
 
 help:
 	@echo "Targets:"
 	@echo "  build       Build local API image ($(APP_IMAGE))"
+	@echo "  build-perf  Build API image with debug symbols ($(APP_PERF_IMAGE))"
 	@echo "  build-lb    Build local LB image ($(LB_IMAGE))"
+	@echo "  build-lb-perf Build LB image with debug symbols ($(LB_PERF_IMAGE))"
 	@echo "  up          Start local stack"
+	@echo "  up-perf     Start stack with perf-enabled images"
 	@echo "  down        Stop local stack"
 	@echo "  test-k6     Run official k6 workload and write $(RESULTS_DIR)/results.json"
 	@echo "  generate-extended Generate larger/reordered test-data JSON"
 	@echo "  test-k6-extended  Run k6 with generated extended dataset"
 	@echo "  bench-local Build, run stack, execute k6, and stop stack"
+	@echo "  bench-perf  Same with perf-enabled images"
 	@echo "  bench-extended Build, run stack, execute extended k6, and stop stack"
 	@echo "  logs        Follow compose logs"
 
@@ -44,11 +59,48 @@ build:
 		-f submission/Dockerfile \
 		-t $(APP_IMAGE) .
 
+build-perf:
+	@docker build \
+		--build-arg RINHA_NATIVE_LEAF_SIZE=$(RINHA_NATIVE_LEAF_SIZE) \
+		--build-arg RINHA_NATIVE_SCALE=$(RINHA_NATIVE_SCALE) \
+		-f submission/Dockerfile.perf \
+		-t $(APP_PERF_IMAGE) .
+
 build-lb:
 	@docker build -f $(LB_DIR)/Dockerfile -t $(LB_IMAGE) $(LB_DIR)
 
+build-lb-perf:
+	@docker build -f $(LB_DIR)/Dockerfile.perf -t $(LB_PERF_IMAGE) $(LB_DIR)
+
 up:
-	@APP_IMAGE=$(APP_IMAGE) LB_IMAGE=$(LB_IMAGE) RINHA_MAX_LEAF_VISITS=$(RINHA_MAX_LEAF_VISITS) RINHA_SEARCH_MODE=$(RINHA_SEARCH_MODE) API_CPU_LIMIT=$(API_CPU_LIMIT) LB_CPU_LIMIT=$(LB_CPU_LIMIT) API_MEMORY_LIMIT=$(API_MEMORY_LIMIT) LB_MEMORY_LIMIT=$(LB_MEMORY_LIMIT) LB_WORKERS=$(LB_WORKERS) $(COMPOSE) up -d --force-recreate
+	@APP_IMAGE=$(APP_IMAGE) LB_IMAGE=$(LB_IMAGE) \
+	RINHA_MAX_LEAF_VISITS=$(RINHA_MAX_LEAF_VISITS) RINHA_SEARCH_MODE=$(RINHA_SEARCH_MODE) \
+	API_CPU_LIMIT=$(API_CPU_LIMIT) LB_CPU_LIMIT=$(LB_CPU_LIMIT) \
+	API_MEMORY_LIMIT=$(API_MEMORY_LIMIT) LB_MEMORY_LIMIT=$(LB_MEMORY_LIMIT) \
+	LB_WORKERS=$(LB_WORKERS) API_THREAD_POOL_SIZE=$(API_THREAD_POOL_SIZE) \
+	RINHA_MLOCK_INDEX=$(RINHA_MLOCK_INDEX) \
+	API1_CPUSET=$(API1_CPUSET) API2_CPUSET=$(API2_CPUSET) LB_CPUSET=$(LB_CPUSET) \
+	LB_SO_INCOMING_CPU=$(LB_SO_INCOMING_CPU) LB_CPU_AFFINITY=$(LB_CPU_AFFINITY) \
+	API_CAP_IPC_LOCK=$(API_CAP_IPC_LOCK) API_MEMLOCK_ULIMIT=$(API_MEMLOCK_ULIMIT) \
+	$(COMPOSE) up -d --force-recreate
+	@echo "Waiting for /ready..."
+	@for i in $$(seq 1 60); do \
+		if curl -sf http://localhost:9999/ready >/dev/null; then echo "ready"; exit 0; fi; \
+		sleep 1; \
+	done; \
+	echo "service did not become ready"; exit 1
+
+up-perf:
+	@APP_IMAGE=$(APP_PERF_IMAGE) LB_IMAGE=$(LB_PERF_IMAGE) \
+	RINHA_MAX_LEAF_VISITS=$(RINHA_MAX_LEAF_VISITS) RINHA_SEARCH_MODE=$(RINHA_SEARCH_MODE) \
+	API_CPU_LIMIT=$(API_CPU_LIMIT) LB_CPU_LIMIT=$(LB_CPU_LIMIT) \
+	API_MEMORY_LIMIT=$(API_MEMORY_LIMIT) LB_MEMORY_LIMIT=$(LB_MEMORY_LIMIT) \
+	LB_WORKERS=$(LB_WORKERS) API_THREAD_POOL_SIZE=$(API_THREAD_POOL_SIZE) \
+	RINHA_MLOCK_INDEX=$(RINHA_MLOCK_INDEX) \
+	API1_CPUSET=$(API1_CPUSET) API2_CPUSET=$(API2_CPUSET) LB_CPUSET=$(LB_CPUSET) \
+	LB_SO_INCOMING_CPU=$(LB_SO_INCOMING_CPU) LB_CPU_AFFINITY=$(LB_CPU_AFFINITY) \
+	API_CAP_IPC_LOCK=$(API_CAP_IPC_LOCK) API_MEMLOCK_ULIMIT=$(API_MEMLOCK_ULIMIT) \
+	docker compose -f submission/docker-compose.yml -f compose.perf.yml up -d --force-recreate
 	@echo "Waiting for /ready..."
 	@for i in $$(seq 1 60); do \
 		if curl -sf http://localhost:9999/ready >/dev/null; then echo "ready"; exit 0; fi; \
@@ -99,6 +151,8 @@ test-k6-extended: generate-extended
 		RINHA_K6_MAX_VUS="$(RINHA_K6_MAX_VUS)"
 
 bench-local: build build-lb up test-k6 down
+
+bench-perf: build-perf build-lb-perf up-perf test-k6 down
 
 bench-extended: build build-lb up test-k6-extended down
 

@@ -3,7 +3,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::net::UnixListener;
 use std::sync::Arc;
 
-pub fn run_fd_server<F>(socket_path: &str, handler: F)
+pub fn run_fd_server<F>(socket_path: &str, pool_size: usize, handler: F)
 where
     F: Fn(TcpStream) + Send + Sync + 'static,
 {
@@ -17,22 +17,29 @@ where
     };
     let handler = Arc::new(handler);
     let pool = threadpool::Builder::new()
-        .num_threads(512)
+        .num_threads(pool_size)
         .thread_stack_size(256 * 1024)
         .build();
 
     for stream in listener.incoming() {
         match stream {
-            Ok(mut control) => {
-                let fd = match recv_fd(&mut control) {
-                    Some(fd) => fd,
-                    None => continue,
-                };
-                let tcp = unsafe { TcpStream::from_raw_fd(fd) };
-                let _ = tcp.set_nodelay(true);
+            Ok(control) => {
                 let handler = Arc::clone(&handler);
-                pool.execute(move || {
-                    handler(tcp);
+                let pool = pool.clone();
+                std::thread::spawn(move || {
+                    let mut control = control;
+                    loop {
+                        let fd = match recv_fd(&mut control) {
+                            Some(fd) => fd,
+                            None => break,
+                        };
+                        let tcp = unsafe { TcpStream::from_raw_fd(fd) };
+                        let _ = tcp.set_nodelay(true);
+                        let handler = Arc::clone(&handler);
+                        pool.execute(move || {
+                            handler(tcp);
+                        });
+                    }
                 });
             }
             Err(e) => {
