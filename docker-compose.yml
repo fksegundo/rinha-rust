@@ -1,9 +1,15 @@
 version: "3.9"
-
 services:
   api1:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
-    pull_policy: always
+    restart: always
+    network_mode: "none"
+    cpuset: "0"
+    user: "0:0"
+    security_opt:
+      - seccomp=unconfined
+    logging:
+      driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
       RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
@@ -14,9 +20,17 @@ services:
         limits:
           cpus: "0.42"
           memory: "165M"
+
   api2:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
-    pull_policy: always
+    restart: always
+    network_mode: "none"
+    cpuset: "1"
+    user: "0:0"
+    security_opt:
+      - seccomp=unconfined
+    logging:
+      driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
       RINHA_SEARCH_MODE: "${RINHA_SEARCH_MODE:-key-first}"
@@ -27,11 +41,16 @@ services:
         limits:
           cpus: "0.42"
           memory: "165M"
+
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:latest
-    pull_policy: always
+    image: ghcr.io/fksegundo/rinha-api-lb:sha-0c6f3b2
+    restart: always
+    cpuset: "2,3"
+    user: "0:0"
     ports:
       - "9999:9999"
+    logging:
+      driver: "none"
     environment:
       PORT: "9999"
       FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
