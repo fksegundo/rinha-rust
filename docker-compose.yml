@@ -4,7 +4,6 @@ services:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
     restart: always
     network_mode: "none"
-    cpuset: "0"
     user: "0:0"
     security_opt:
       - seccomp=unconfined
@@ -25,7 +24,6 @@ services:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
     restart: always
     network_mode: "none"
-    cpuset: "1"
     user: "0:0"
     security_opt:
       - seccomp=unconfined
@@ -45,7 +43,6 @@ services:
   lb:
     image: ghcr.io/fksegundo/rinha-api-lb:sha-0c6f3b2
     restart: always
-    cpuset: "2,3"
     user: "0:0"
     ports:
       - "9999:9999"
