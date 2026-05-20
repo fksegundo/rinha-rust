@@ -1,0 +1,13 @@
+target/
+test/
+tmp/
+local/
+privatedocs/
+.idea/
+scripts/
+k6/
+compose.local.yml
+compose.perf.yml
+compose.mlock.yml
+docker/Dockerfile.perf
+submission/

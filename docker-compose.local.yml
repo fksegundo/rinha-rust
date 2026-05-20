@@ -1,0 +1,73 @@
+version: "3.9"
+services:
+  api1:
+    image: rinha-rust-api:local
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      RINHA_FD_SOCKET: /sockets/api1.sock
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.42"
+          memory: "165M"
+
+  api2:
+    image: rinha-rust-api:local
+    restart: always
+    network_mode: "none"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      RINHA_FD_SOCKET: /sockets/api2.sock
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.42"
+          memory: "165M"
+
+  lb:
+    image: ghcr.io/fksegundo/rinha-api-lb:latest
+    pull_policy: always
+    restart: always
+    user: "0:0"
+    ports:
+      - "9999:9999"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      PORT: "9999"
+      FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
+      WORKERS: "4"
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.16"
+          memory: "20M"
+    depends_on:
+      - api1
+      - api2
+
+volumes:
+  sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=10m
