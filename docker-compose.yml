@@ -1,12 +1,14 @@
 services:
   api1:
-    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    image: ghcr.io/fksegundo/rinha-rust-api:sha-8c5e3f0
     pull_policy: always
     restart: always
     logging:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
+      RINHA_THREAD_POOL_SIZE: "256"
+      RINHA_SEARCH_MODE: "key-first"
     volumes:
       - sockets:/sockets
     deploy:
@@ -16,7 +18,7 @@ services:
           memory: "165M"
 
   api2:
-    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    image: ghcr.io/fksegundo/rinha-rust-api:sha-8c5e3f0
     pull_policy: always
     restart: always
     network_mode: "none"
@@ -24,6 +26,8 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
+      RINHA_THREAD_POOL_SIZE: "256"
+      RINHA_SEARCH_MODE: "key-first"
     volumes:
       - sockets:/sockets
     deploy:
