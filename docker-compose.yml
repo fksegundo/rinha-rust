@@ -41,10 +41,6 @@ services:
       - "9999:9999"
     logging:
       driver: "none"
-    environment:
-      PORT: "9999"
-      FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
-      WORKERS: "1"
     volumes:
       - sockets:/sockets
     deploy:
