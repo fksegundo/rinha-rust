@@ -1,6 +1,6 @@
 services:
   api1:
-    image: ghcr.io/fksegundo/rinha-rust-api:sha-8c5e3f0
+    image: ghcr.io/fksegundo/rinha-rust-api:sha-3376bed
     pull_policy: always
     restart: always
     logging:
@@ -18,7 +18,7 @@ services:
           memory: "165M"
 
   api2:
-    image: ghcr.io/fksegundo/rinha-rust-api:sha-8c5e3f0
+    image: ghcr.io/fksegundo/rinha-rust-api:sha-3376bed
     pull_policy: always
     restart: always
     network_mode: "none"
@@ -37,7 +37,7 @@ services:
           memory: "165M"
 
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:sha-0c6f3b2
+    image: ghcr.io/fksegundo/rinha-api-lb:sha-2efe5f8
     pull_policy: always
     restart: always
     user: "0:0"
