@@ -33,7 +33,7 @@ services:
           memory: "165M"
 
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:latest
+    image: ghcr.io/fksegundo/rinha-api-lb:sha-0c6f3b2
     pull_policy: always
     restart: always
     user: "0:0"
@@ -41,6 +41,10 @@ services:
       - "9999:9999"
     logging:
       driver: "none"
+    environment:
+      PORT: "9999"
+      FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
+      WORKERS: "1"
     volumes:
       - sockets:/sockets
     deploy:
