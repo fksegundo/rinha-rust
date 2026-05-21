@@ -15,7 +15,7 @@ services:
       resources:
         limits:
           cpus: "0.42"
-          memory: "165"
+          memory: "165M"
 
   api2:
     image: ghcr.io/fksegundo/rinha-rust-api:sha-59dd1b0
@@ -34,7 +34,7 @@ services:
       resources:
         limits:
           cpus: "0.42"
-          memory: "165"
+          memory: "165M"
 
   lb:
     image: ghcr.io/fksegundo/rinha-api-lb:sha-0735ce6
