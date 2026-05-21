@@ -2,6 +2,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 pub const RESPONSE_READY: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+pub const RESPONSE_NOT_READY: &[u8] =
+    b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n";
 pub const RESPONSE_FRAUD_0: &[u8] =
     b"HTTP/1.1 200 OK\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}";
 pub const RESPONSE_FRAUD_1: &[u8] =
