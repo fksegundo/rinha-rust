@@ -37,7 +37,7 @@ services:
           memory: "165M"
 
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:sha-0735ce6
+    image: ghcr.io/fksegundo/rinha-api-lb:sha-9efc31b
     pull_policy: always
     restart: always
     user: "0:0"
