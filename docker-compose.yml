@@ -15,7 +15,7 @@ services:
       resources:
         limits:
           cpus: "0.35"
-          memory: "155M"
+          memory: "160M"
 
   api2:
     image: ghcr.io/fksegundo/rinha-rust-api:sha-59dd1b0
@@ -33,8 +33,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.35"
-          memory: "155M"
+          cpus: "0.40"
+          memory: "160M"
 
   lb:
     image: ghcr.io/fksegundo/rinha-api-lb:sha-01c5db3
@@ -48,16 +48,16 @@ services:
     environment:
       PORT: "9999"
       FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
-      WORKERS: "1"
-      HANDOFF_MAX_INFLIGHT: "128" 
+      WORKERS: "2"
+      HANDOFF_MAX_INFLIGHT: "192" 
       HANDOFF_RETRIES: "3"
     volumes:
       - sockets:/sockets
     deploy:
       resources:
         limits:
-          cpus: "0.30"
-          memory: "40M"
+          cpus: "0.20"
+          memory: "30M"
     depends_on:
       - api1
       - api2
