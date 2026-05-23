@@ -37,7 +37,7 @@ services:
           memory: "160M"
 
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:sha-0a30e49
+    image: ghcr.io/fksegundo/rinha-api-lb:sha-01c5db3
     pull_policy: always
     restart: always
     user: "0:0"
@@ -49,6 +49,8 @@ services:
       PORT: "9999"
       FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
       WORKERS: "1"
+      HANDOFF_MAX_INFLIGHT: "128" 
+      HANDOFF_RETRIES: "3"
     volumes:
       - sockets:/sockets
     deploy:
