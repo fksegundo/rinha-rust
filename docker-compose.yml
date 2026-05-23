@@ -14,8 +14,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.155"
-          memory: "155"
+          cpus: "0.35"
+          memory: "155M"
 
   api2:
     image: ghcr.io/fksegundo/rinha-rust-api:sha-59dd1b0
