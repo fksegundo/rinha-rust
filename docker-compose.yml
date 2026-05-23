@@ -1,16 +1,20 @@
 services:
   api1:
-    image: ghcr.io/fksegundo/rinha-rust-api:sha-59dd1b0
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
     restart: always
     logging:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
-      RINHA_THREAD_POOL_SIZE: "256"
+      RINHA_THREAD_POOL_SIZE: "64"
       RINHA_SEARCH_MODE: "key-first"
     volumes:
       - sockets:/sockets
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     deploy:
       resources:
         limits:
@@ -18,7 +22,7 @@ services:
           memory: "160M"
 
   api2:
-    image: ghcr.io/fksegundo/rinha-rust-api:sha-59dd1b0
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
     restart: always
     network_mode: "none"
@@ -26,10 +30,14 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
-      RINHA_THREAD_POOL_SIZE: "256"
+      RINHA_THREAD_POOL_SIZE: "64"
       RINHA_SEARCH_MODE: "key-first"
     volumes:
       - sockets:/sockets
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     deploy:
       resources:
         limits:
@@ -37,7 +45,7 @@ services:
           memory: "160M"
 
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:sha-0735ce6
+    image: ghcr.io/fksegundo/rinha-api-lb:latest
     pull_policy: always
     restart: always
     user: "0:0"
@@ -48,9 +56,13 @@ services:
     environment:
       PORT: "9999"
       FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
-      WORKERS: "1"
+      WORKERS: "2"
     volumes:
       - sockets:/sockets
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     deploy:
       resources:
         limits:
