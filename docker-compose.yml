@@ -3,6 +3,7 @@ services:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
     restart: always
+    network_mode: "none"
     logging:
       driver: "none"
     environment:
