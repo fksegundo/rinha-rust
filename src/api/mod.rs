@@ -22,7 +22,14 @@ pub fn run(index_path: &str, bind_addr: &str, fd_socket: Option<&str>) {
     }
 
     let ready = Arc::new(AtomicBool::new(false));
-    spawn_warmup(Arc::clone(&index), Arc::clone(&ready));
+
+    eprintln!(
+        "warming up index with {} queries...",
+        runtime::warmup_queries()
+    );
+    warm_up_index(&index);
+    ready.store(true, Ordering::Release);
+    eprintln!("warmup complete, accepting connections");
 
     let pool_size = thread_pool_size();
 
@@ -130,13 +137,6 @@ fn warm_up_index(index: &SpecialistIndex) {
         }
         let _ = index.predict_fraud_count(&query);
     }
-}
-
-fn spawn_warmup(index: Arc<SpecialistIndex>, ready: Arc<AtomicBool>) {
-    std::thread::spawn(move || {
-        warm_up_index(&index);
-        ready.store(true, Ordering::Release);
-    });
 }
 
 fn is_ready(ready: &AtomicBool) -> bool {
