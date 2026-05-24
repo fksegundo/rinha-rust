@@ -8,19 +8,17 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
-      RINHA_SEARCH_MODE: "key-first"
     volumes:
       - sockets:/sockets
     ulimits:
-      memlock: -1  
-      nofile:
-        soft: 65535
-        hard: 65535
+      memlock:
+        soft: -1
+        hard: -1
     deploy:
       resources:
         limits:
-          cpus: "0.40"
-          memory: "160M"
+          cpus: "0.45"
+          memory: "170M"
 
   api2:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
@@ -31,19 +29,17 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
-      RINHA_SEARCH_MODE: "key-first"
     volumes:
       - sockets:/sockets
     ulimits:
-      memlock: -1  
-      nofile:
-        soft: 65535
-        hard: 65535
+      memlock:
+        soft: -1
+        hard: -1
     deploy:
       resources:
         limits:
-          cpus: "0.40"
-          memory: "160M"
+          cpus: "0.45"
+          memory: "170M"
 
   lb:
     image: ghcr.io/fksegundo/rinha-api-lb:latest
@@ -54,21 +50,13 @@ services:
       - "9999:9999"
     logging:
       driver: "none"
-    environment:
-      PORT: "9999"
-      FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
-      WORKERS: "2"
     volumes:
       - sockets:/sockets
-    ulimits:
-      nofile:
-        soft: 65535
-        hard: 65535
     deploy:
       resources:
         limits:
-          cpus: "0.20"
-          memory: "30M"
+          cpus: "0.10"
+          memory: "10M"
     depends_on:
       - api1
       - api2
