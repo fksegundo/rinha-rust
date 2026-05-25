@@ -44,7 +44,7 @@ services:
   lb:
     image: ghcr.io/fksegundo/rinha-api-lb:latest
     pull_policy: always
-    cpuset: ["2","3"]
+    cpuset: "2,3"
     restart: always
     user: "0:0"
     ports:
