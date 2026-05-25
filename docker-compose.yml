@@ -7,7 +7,7 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
-      RINHA_EARLY_EXIT_THRESHOLD: "2000000"
+      RINHA_EARLY_EXIT_THRESHOLD: "2500000"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -28,7 +28,7 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock 
-      RINHA_EARLY_EXIT_THRESHOLD: "2000000"
+      RINHA_EARLY_EXIT_THRESHOLD: "2500000"
     volumes:
       - sockets:/sockets
     ulimits:
