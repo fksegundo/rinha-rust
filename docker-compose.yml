@@ -8,6 +8,7 @@ services:
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
       RINHA_EARLY_EXIT_THRESHOLD: "2500000"
+      RINHA_WARMUP_QUERIES: "24576"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -29,6 +30,7 @@ services:
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock 
       RINHA_EARLY_EXIT_THRESHOLD: "2500000"
+      RINHA_WARMUP_QUERIES: "24576"
     volumes:
       - sockets:/sockets
     ulimits:
