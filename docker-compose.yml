@@ -1,6 +1,6 @@
 services:
   api1:
-    image: ghcr.io/fksegundo/rinha-rust-api:sha-eec7091
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
     restart: always
     logging:
@@ -22,7 +22,7 @@ services:
           memory: "170M"
 
   api2:
-    image: ghcr.io/fksegundo/rinha-rust-api:sha-eec7091
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
     restart: always
     logging:
