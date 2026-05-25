@@ -44,7 +44,7 @@ services:
           memory: "170M"
 
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:latest
+    image: ghcr.io/fksegundo/rinha-dotnet-lb:latest
     pull_policy: always
     restart: always
     user: "0:0"
