@@ -2,7 +2,7 @@ services:
   api1:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
-    cpuset: 0
+    cpuset: "0"
     restart: always
     logging:
       driver: "none"
@@ -23,7 +23,7 @@ services:
   api2:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
-    cpuset: 1
+    cpuset: "1"
     restart: always
     logging:
       driver: "none"
@@ -44,7 +44,7 @@ services:
   lb:
     image: ghcr.io/fksegundo/rinha-api-lb:latest
     pull_policy: always
-    cpuset: [2,3]
+    cpuset: ["2","3"]
     restart: always
     user: "0:0"
     ports:
