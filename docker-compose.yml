@@ -2,7 +2,6 @@ services:
   api1:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
-    cpuset: "0"
     restart: always
     logging:
       driver: "none"
@@ -17,13 +16,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.48"
+          cpus: "0.49"
           memory: "170M"
 
   api2:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
-    cpuset: "1"
     restart: always
     logging:
       driver: "none"
@@ -38,13 +36,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.48"
+          cpus: "0.49"
           memory: "170M"
 
   lb:
     image: ghcr.io/fksegundo/rinha-api-lb:latest
     pull_policy: always
-    cpuset: "2,3"
     restart: always
     user: "0:0"
     ports:
@@ -56,7 +53,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.04"
+          cpus: "0.02"
           memory: "6M"
     depends_on:
       - api1
