@@ -7,10 +7,10 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
-      RINHA_EARLY_EXIT_THRESHOLD: "2000000"
+      RINHA_EARLY_EXIT_THRESHOLD: "2500000"
       RINHA_WARMUP_QUERIES: "256"
       RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
-      RINHA_THREAD_POOL_SIZE: "64"
+      RINHA_THREAD_POOL_SIZE: "48"
       RINHA_PRETOUCH_INDEX: "1"
     volumes:
       - sockets:/sockets
@@ -32,10 +32,10 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock 
-      RINHA_EARLY_EXIT_THRESHOLD: "2000000"
+      RINHA_EARLY_EXIT_THRESHOLD: "2500000"
       RINHA_WARMUP_QUERIES: "256"
       RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
-      RINHA_THREAD_POOL_SIZE: "64"
+      RINHA_THREAD_POOL_SIZE: "48"
       RINHA_PRETOUCH_INDEX: "1"
     volumes:
       - sockets:/sockets
