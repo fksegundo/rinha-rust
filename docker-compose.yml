@@ -1,14 +1,17 @@
 services:
   api1:
-    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    image: ghcr.io/fksegundo/rinha-rust-api:sha-a0290cf
     pull_policy: always
     restart: always
     logging:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
-      RINHA_EARLY_EXIT_THRESHOLD: "2500000"
-      RINHA_WARMUP_QUERIES: "24576"
+      RINHA_EARLY_EXIT_THRESHOLD: "2000000"
+      RINHA_WARMUP_QUERIES: "256"
+      RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
+      RINHA_THREAD_POOL_SIZE: "64"
+      RINHA_PRETOUCH_INDEX: "1"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -22,15 +25,18 @@ services:
           memory: "170M"
 
   api2:
-    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    image: ghcr.io/fksegundo/rinha-rust-api:sha-a0290cf
     pull_policy: always
     restart: always
     logging:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock 
-      RINHA_EARLY_EXIT_THRESHOLD: "2500000"
-      RINHA_WARMUP_QUERIES: "24576"
+      RINHA_EARLY_EXIT_THRESHOLD: "2000000"
+      RINHA_WARMUP_QUERIES: "256"
+      RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
+      RINHA_THREAD_POOL_SIZE: "64"
+      RINHA_PRETOUCH_INDEX: "1"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -44,7 +50,7 @@ services:
           memory: "170M"
 
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:latest
+    image: ghcr.io/fksegundo/rinha-api-lb:sha-ee837aa
     pull_policy: always
     restart: always
     user: "0:0"
