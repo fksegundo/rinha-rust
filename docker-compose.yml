@@ -10,7 +10,7 @@ services:
       RINHA_EARLY_EXIT_THRESHOLD: "2500000"
       RINHA_WARMUP_QUERIES: "256"
       RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
-      RINHA_THREAD_POOL_SIZE: "48"
+      RINHA_THREAD_POOL_SIZE: "64"
       RINHA_PRETOUCH_INDEX: "1"
     volumes:
       - sockets:/sockets
@@ -35,7 +35,7 @@ services:
       RINHA_EARLY_EXIT_THRESHOLD: "2500000"
       RINHA_WARMUP_QUERIES: "256"
       RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
-      RINHA_THREAD_POOL_SIZE: "48"
+      RINHA_THREAD_POOL_SIZE: "64"
       RINHA_PRETOUCH_INDEX: "1"
     volumes:
       - sockets:/sockets
@@ -50,7 +50,7 @@ services:
           memory: "172M"
 
   lb:
-    image: ghcr.io/fksegundo/rinha-api-lb:sha-ee837aa
+    image: ghcr.io/fksegundo/rinha-api-lb:sha-0c6f3b2sha-ee837aa
     pull_policy: always
     restart: always
     user: "0:0"
