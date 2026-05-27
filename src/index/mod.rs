@@ -51,6 +51,7 @@ pub struct SpecialistIndex {
     partitions_base: *const u8,
     partition_count: usize,
     key_to_partition: [i32; KEY_LOOKUP_SIZE],
+    active_keys: Vec<u32>,
     partition_cuts_v0: [i16; 7],
     nodes_base: *const u8,
     node_count: usize,
@@ -248,12 +249,20 @@ impl SpecialistIndex {
             partition_count, node_count, total_blocks, has_avx2, early_exit_threshold_val, cuts
         );
 
+        let mut active_keys = Vec::with_capacity(partition_count);
+        for (key, &idx) in key_to_partition.iter().enumerate() {
+            if idx >= 0 {
+                active_keys.push(key as u32);
+            }
+        }
+
         let index = Self {
             _mapping: mapping,
             reference_count,
             partitions_base,
             partition_count,
             key_to_partition,
+            active_keys,
             partition_cuts_v0: cuts,
             nodes_base,
             node_count,
@@ -365,10 +374,11 @@ impl SpecialistIndex {
         let mut partition_entries = [(0i64, 0usize); MAX_PARTITIONS];
         let mut partition_len = 0usize;
 
-        for idx in 0..self.partition_count {
-            if Some(idx) == exact_partition_idx {
+        for &key in &self.active_keys {
+            if key == query_key {
                 continue;
             }
+            let idx = self.key_to_partition[key as usize] as usize;
             let bound = lower_bound_box(
                 query,
                 unsafe { layout::partition_min(self.partitions_base, idx) },
