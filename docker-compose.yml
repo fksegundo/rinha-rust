@@ -2,6 +2,7 @@ services:
   api1:
     image: filonsegundo/rinha-rust:no-pgo
     pull_policy: always
+    cpuset: "0"
     restart: always
     logging:
       driver: "none"
@@ -27,6 +28,7 @@ services:
   api2:
     image: filonsegundo/rinha-rust:no-pgo
     pull_policy: always
+    cpuset: "1"
     restart: always
     logging:
       driver: "none"
@@ -53,6 +55,7 @@ services:
     image: ghcr.io/fksegundo/rinha-api-lb:latest
     pull_policy: always
     restart: always
+    cpuset: "2,3"
     user: "0:0"
     ports:
       - "9999:9999"
