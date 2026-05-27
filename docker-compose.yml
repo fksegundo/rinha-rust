@@ -1,6 +1,6 @@
 services:
   api1:
-    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    image: filonsegundo/rinha-rust:pgo
     pull_policy: always
     restart: always
     logging:
@@ -21,11 +21,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.48"
+          cpus: "0.4"
           memory: "170M"
 
   api2:
-    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    image: filonsegundo/rinha-rust:pgo
     pull_policy: always
     restart: always
     logging:
@@ -46,7 +46,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.48"
+          cpus: "0.4"
           memory: "170M"
 
   lb:
@@ -63,7 +63,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.04"
+          cpus: "0.2"
           memory: "10M"
     depends_on:
       - api1
