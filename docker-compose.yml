@@ -7,8 +7,8 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
-      #RINHA_PRETOUCH_INDEX: "1"
-      #RINHA_MLOCK_INDEX: "1"
+      RINHA_PRETOUCH_INDEX: "1"
+      RINHA_MLOCK_INDEX: "1"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -21,7 +21,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.4"
+          cpus: "0.48"
           memory: "170M"
 
   api2:
@@ -32,8 +32,8 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
-      #RINHA_PRETOUCH_INDEX: "1"
-      #RINHA_MLOCK_INDEX: "1"
+      RINHA_PRETOUCH_INDEX: "1"
+      RINHA_MLOCK_INDEX: "1"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -46,7 +46,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.4"
+          cpus: "0.48"
           memory: "170M"
 
   lb:
@@ -63,7 +63,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.2"
+          cpus: "0.04"
           memory: "10M"
     depends_on:
       - api1
