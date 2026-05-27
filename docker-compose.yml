@@ -7,7 +7,7 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
-      RINHA_PRETOUCH_INDEX: "1"
+      #RINHA_PRETOUCH_INDEX: "1"
       RINHA_MLOCK_INDEX: "1"
     volumes:
       - sockets:/sockets
@@ -32,7 +32,7 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
-      RINHA_PRETOUCH_INDEX: "1"
+      #RINHA_PRETOUCH_INDEX: "1"
       RINHA_MLOCK_INDEX: "1"
     volumes:
       - sockets:/sockets
