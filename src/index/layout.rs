@@ -94,22 +94,15 @@ pub(crate) unsafe fn node_len(nodes_base: *const u8, idx: usize) -> usize {
 }
 
 #[inline(always)]
-pub(crate) unsafe fn node_min<'a>(
-    nodes_base: *const u8,
-    idx: usize,
-) -> &'a [i16; PACKED_DIMS] {
+pub(crate) unsafe fn node_min<'a>(nodes_base: *const u8, idx: usize) -> &'a [i16; PACKED_DIMS] {
     &*nodes_base
         .add(idx * NODE_STRIDE + NODE_MIN_OFF)
         .cast::<[i16; PACKED_DIMS]>()
 }
 
 #[inline(always)]
-pub(crate) unsafe fn node_max<'a>(
-    nodes_base: *const u8,
-    idx: usize,
-) -> &'a [i16; PACKED_DIMS] {
+pub(crate) unsafe fn node_max<'a>(nodes_base: *const u8, idx: usize) -> &'a [i16; PACKED_DIMS] {
     &*nodes_base
         .add(idx * NODE_STRIDE + NODE_MAX_OFF)
         .cast::<[i16; PACKED_DIMS]>()
 }
-

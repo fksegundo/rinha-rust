@@ -1,4 +1,4 @@
-use crate::http::{self, BufferStep, Request, BUF_SIZE};
+use crate::http::{self, BUF_SIZE, BufferStep, Request};
 use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};

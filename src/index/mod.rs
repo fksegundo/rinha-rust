@@ -442,7 +442,13 @@ impl SpecialistIndex {
                 let left = unsafe { layout::node_left(self.nodes_base, current) };
                 let right = unsafe { layout::node_right(self.nodes_base, current) };
                 if left < 0 || right < 0 {
-                    self.scan_leaf(current, query, best_dists, best_labels, stats.as_deref_mut());
+                    self.scan_leaf(
+                        current,
+                        query,
+                        best_dists,
+                        best_labels,
+                        stats.as_deref_mut(),
+                    );
                 } else {
                     let l = left as usize;
                     let r = right as usize;
@@ -451,9 +457,7 @@ impl SpecialistIndex {
                     unsafe {
                         use std::arch::x86_64::*;
                         _mm_prefetch(
-                            self.nodes_base
-                                .add(r * layout::NODE_STRIDE)
-                                as *const i8,
+                            self.nodes_base.add(r * layout::NODE_STRIDE) as *const i8,
                             _MM_HINT_T0,
                         );
                     }

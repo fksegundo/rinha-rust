@@ -171,7 +171,11 @@ fn skip_number(json: &[u8], i: usize) -> Result<usize, ParseError> {
 }
 
 fn skip_literal(json: &[u8], i: usize, lit: &[u8]) -> Result<usize, ParseError> {
-    if json.get(i..i + lit.len()).ok_or(ParseError::InvalidFormat)? == lit {
+    if json
+        .get(i..i + lit.len())
+        .ok_or(ParseError::InvalidFormat)?
+        == lit
+    {
         Ok(i + lit.len())
     } else {
         Err(ParseError::InvalidFormat)
@@ -403,16 +407,14 @@ fn scan_fields(json: &[u8]) -> Result<FieldSlots, ParseError> {
             i = scan_object_fields(json, value_start, ObjectKind::Terminal, &mut slots)?;
         } else if eq_key_bytes(key, b"last_transaction") {
             slots.last_transaction_seen = true;
-            let c = json.get(value_start).copied().ok_or(ParseError::InvalidFormat)?;
+            let c = json
+                .get(value_start)
+                .copied()
+                .ok_or(ParseError::InvalidFormat)?;
             if c == b'n' {
                 i = skip_value(json, value_start)?;
             } else if c == b'{' {
-                i = scan_object_fields(
-                    json,
-                    value_start,
-                    ObjectKind::LastTransaction,
-                    &mut slots,
-                )?;
+                i = scan_object_fields(json, value_start, ObjectKind::LastTransaction, &mut slots)?;
             } else {
                 return Err(ParseError::InvalidFormat);
             }
@@ -588,7 +590,13 @@ fn build_query(json: &[u8], slots: &FieldSlots, out: &mut QueryVector) -> Result
         out[6] = -SCALE;
     }
 
-    finish_vector(out, amount, customer_avg_amount, merchant_hash, &known_hashes[..known_count]);
+    finish_vector(
+        out,
+        amount,
+        customer_avg_amount,
+        merchant_hash,
+        &known_hashes[..known_count],
+    );
     Ok(())
 }
 
