@@ -9,7 +9,6 @@ services:
       RINHA_FD_SOCKET: /sockets/api1.sock
       RINHA_PRETOUCH_INDEX: "1"
       RINHA_MLOCK_INDEX: "1"
-      RINHA_EARLY_EXIT_THRESHOLD: "2000000"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -22,7 +21,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.42"
+          cpus: "0.45"
           memory: "170M"
 
   api2:
@@ -35,7 +34,6 @@ services:
       RINHA_FD_SOCKET: /sockets/api2.sock
       RINHA_PRETOUCH_INDEX: "1"
       RINHA_MLOCK_INDEX: "1"
-      RINHA_EARLY_EXIT_THRESHOLD: "2000000"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -48,7 +46,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.42"
+          cpus: "0.45"
           memory: "170M"
 
   lb:
@@ -65,7 +63,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.06"
+          cpus: "0.1"
           memory: "10M"
     depends_on:
       - api1
