@@ -22,6 +22,38 @@ pub const RESPONSE_NOT_FOUND: &[u8] =
     b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
 
 const MAX_BODY_LEN: usize = 8192;
+pub const BUF_SIZE: usize = 2048;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum BufferStep {
+    Respond {
+        consumed: usize,
+        response: &'static [u8],
+        keep_alive: bool,
+    },
+    RejectAndClose {
+        response: &'static [u8],
+    },
+    NeedMore,
+}
+
+pub fn process_one_request<F>(buf: &[u8], mut handler: F) -> BufferStep
+where
+    F: FnMut(&Request) -> &'static [u8],
+{
+    match parse_request_result(buf) {
+        ParseResult::Complete(req, consumed) => {
+            let response = handler(&req);
+            BufferStep::Respond {
+                consumed,
+                response,
+                keep_alive: req.keep_alive,
+            }
+        }
+        ParseResult::Reject(response, _) => BufferStep::RejectAndClose { response },
+        ParseResult::NeedMore => BufferStep::NeedMore,
+    }
+}
 
 pub const FRAUD_RESPONSES: [&[u8]; 6] = [
     RESPONSE_FRAUD_0,
@@ -105,15 +137,22 @@ fn early_rejection(method: Method, path: &[u8], content_length: usize) -> Option
 }
 
 fn find_header_end(buf: &[u8]) -> Option<usize> {
-    let n = buf.len();
-    let mut i = 3;
-    while i < n {
-        if buf[i] == b'\n' && buf[i - 1] == b'\r' && buf[i - 2] == b'\n' && buf[i - 3] == b'\r' {
-            return Some(i + 1);
-        }
-        i += 1;
+    if buf.len() < 4 {
+        return None;
     }
-    None
+    const NEEDLE: &[u8] = b"\r\n\r\n";
+    let found = unsafe {
+        libc::memmem(
+            buf.as_ptr().cast(),
+            buf.len(),
+            NEEDLE.as_ptr().cast(),
+            NEEDLE.len(),
+        )
+    };
+    if found.is_null() {
+        return None;
+    }
+    Some((found as usize) - (buf.as_ptr() as usize) + NEEDLE.len())
 }
 
 fn parse_first_line(buf: &[u8]) -> Option<(Method, (usize, usize), usize)> {
@@ -179,7 +218,7 @@ pub fn handle_connection<F>(mut stream: TcpStream, mut handler: F)
 where
     F: FnMut(&Request) -> &'static [u8],
 {
-    let mut buf = [0u8; 8192];
+    let mut buf = [0u8; BUF_SIZE];
     let mut used = 0usize;
     loop {
         match stream.read(&mut buf[used..]) {
@@ -188,22 +227,25 @@ where
                 used += n;
                 let mut processed = 0usize;
                 while processed < used {
-                    match parse_request_result(&buf[processed..used]) {
-                        ParseResult::Complete(req, consumed) => {
-                            let response = handler(&req);
+                    match process_one_request(&buf[processed..used], &mut handler) {
+                        BufferStep::Respond {
+                            consumed,
+                            response,
+                            keep_alive,
+                        } => {
                             if stream.write_all(response).is_err() {
                                 return;
                             }
                             processed += consumed;
-                            if !req.keep_alive {
+                            if !keep_alive {
                                 return;
                             }
                         }
-                        ParseResult::Reject(response, _consumed) => {
+                        BufferStep::RejectAndClose { response } => {
                             let _ = stream.write_all(response);
                             return;
                         }
-                        ParseResult::NeedMore => {
+                        BufferStep::NeedMore => {
                             if used >= buf.len() {
                                 let _ = stream.write_all(RESPONSE_BAD_REQUEST);
                                 return;
@@ -309,5 +351,67 @@ mod tests {
         server.join().expect("server thread");
 
         assert!(response[..n].starts_with(RESPONSE_BAD_REQUEST));
+    }
+
+    #[test]
+    fn keep_alive_processes_two_requests_in_one_buffer() {
+        let req1 = b"GET /ready HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let req2 = b"GET /ready HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        let mut buf = Vec::new();
+        buf.extend_from_slice(req1);
+        buf.extend_from_slice(req2);
+
+        let mut offset = 0usize;
+        for _ in 0..2 {
+            match process_one_request(&buf[offset..], |_| RESPONSE_READY) {
+                BufferStep::Respond {
+                    consumed,
+                    response,
+                    keep_alive,
+                } => {
+                    assert_eq!(response, RESPONSE_READY);
+                    assert!(keep_alive);
+                    offset += consumed;
+                }
+                other => panic!("unexpected step: {:?}", other),
+            }
+        }
+        assert_eq!(offset, buf.len());
+    }
+
+    #[test]
+    fn pipeline_returns_two_responses_from_one_buffer() {
+        let body = b"{}";
+        let req1 = format!(
+            "POST /fraud-score HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let mut buf = Vec::new();
+        buf.extend_from_slice(req1.as_bytes());
+        buf.extend_from_slice(body);
+        buf.extend_from_slice(b"GET /ready HTTP/1.1\r\nHost: localhost\r\n\r\n");
+
+        let mut responses = Vec::new();
+        let mut offset = 0usize;
+        while offset < buf.len() {
+            match process_one_request(&buf[offset..], |req| {
+                if req.path == b"/ready" {
+                    RESPONSE_READY
+                } else {
+                    RESPONSE_FRAUD_0
+                }
+            }) {
+                BufferStep::Respond {
+                    consumed, response, ..
+                } => {
+                    responses.push(response);
+                    offset += consumed;
+                }
+                other => panic!("unexpected step: {:?}", other),
+            }
+        }
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0], RESPONSE_FRAUD_0);
+        assert_eq!(responses[1], RESPONSE_READY);
     }
 }

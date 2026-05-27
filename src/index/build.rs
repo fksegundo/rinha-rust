@@ -1,5 +1,5 @@
-use crate::index::compute_partition_key;
 use crate::index::format::IndexWriter;
+use crate::index::{compute_partition_key, set_partition_cuts_v0};
 use crate::{DIMS, PACKED_DIMS, QueryVector, SCALE};
 use flate2::read::GzDecoder;
 use std::collections::HashMap;
@@ -15,11 +15,18 @@ pub struct Reference {
 
 pub fn load_references(path: &str) -> Result<Vec<Reference>, String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-    let mut decoder = GzDecoder::new(file);
     let mut json_str = String::new();
-    decoder
-        .read_to_string(&mut json_str)
-        .map_err(|e| e.to_string())?;
+    if path.ends_with(".gz") {
+        let mut decoder = GzDecoder::new(file);
+        decoder
+            .read_to_string(&mut json_str)
+            .map_err(|e| e.to_string())?;
+    } else {
+        let mut reader = std::io::BufReader::new(file);
+        reader
+            .read_to_string(&mut json_str)
+            .map_err(|e| e.to_string())?;
+    }
 
     let json: serde_json::Value =
         serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
@@ -77,14 +84,29 @@ struct NodeEntry {
     max: QueryVector,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KdSplitStrategy {
+    Widest,
+    Variance,
+}
+
 pub fn build_index(
     references: Vec<Reference>,
     leaf_size: usize,
     _flat_threshold: usize,
 ) -> Result<Vec<u8>, String> {
-    let leaf_size = leaf_size.clamp(32, 2048);
+    let leaf_size = leaf_size.clamp(LANES, 2048);
+    let split_strategy = kd_split_strategy();
+
+    let cuts = compute_v0_cuts(&references);
+    set_partition_cuts_v0(&cuts);
+    eprintln!(
+        "[build] v[0] equi-freq cuts: {:?} (will be persisted in header), kd_split={:?}",
+        cuts, split_strategy
+    );
+
     let mut writer = IndexWriter::new();
-    writer.write_header(references.len() as i32)?;
+    writer.write_header(references.len() as i32, &cuts)?;
 
     let mut partitions: HashMap<u32, Vec<usize>> = HashMap::new();
     for (idx, ref_item) in references.iter().enumerate() {
@@ -101,7 +123,14 @@ pub fn build_index(
 
     for key in &sorted_keys {
         let indices = &partitions[key];
-        let root = build_node(&references, indices, leaf_size, &mut all_blocks, &mut nodes);
+        let root = build_node(
+            &references,
+            indices,
+            leaf_size,
+            split_strategy,
+            &mut all_blocks,
+            &mut nodes,
+        );
         partition_meta.push((*key, root));
     }
 
@@ -153,6 +182,7 @@ fn build_node(
     references: &[Reference],
     indices: &[usize],
     leaf_size: usize,
+    split_strategy: KdSplitStrategy,
     all_blocks: &mut Vec<(QueryVector, u8)>,
     nodes: &mut Vec<NodeEntry>,
 ) -> usize {
@@ -203,7 +233,10 @@ fn build_node(
         return node_idx;
     }
 
-    let split_dim = widest_dimension(&min, &max);
+    let split_dim = match split_strategy {
+        KdSplitStrategy::Widest => widest_dimension(&min, &max),
+        KdSplitStrategy::Variance => variance_dimension(references, indices, &min, &max),
+    };
     let mut sorted = indices.to_vec();
     sorted.sort_unstable_by(|&a, &b| {
         references[a].vector[split_dim].cmp(&references[b].vector[split_dim])
@@ -212,8 +245,22 @@ fn build_node(
     let left_len = sorted.len() / 2;
     let (left_indices, right_indices) = sorted.split_at(left_len);
 
-    let left_node = build_node(references, left_indices, leaf_size, all_blocks, nodes);
-    let right_node = build_node(references, right_indices, leaf_size, all_blocks, nodes);
+    let left_node = build_node(
+        references,
+        left_indices,
+        leaf_size,
+        split_strategy,
+        all_blocks,
+        nodes,
+    );
+    let right_node = build_node(
+        references,
+        right_indices,
+        leaf_size,
+        split_strategy,
+        all_blocks,
+        nodes,
+    );
 
     let left_info = &nodes[left_node];
     let right_info = &nodes[right_node];
@@ -230,6 +277,22 @@ fn build_node(
     node_idx
 }
 
+fn compute_v0_cuts(references: &[Reference]) -> [i16; 7] {
+    if references.len() < 8 {
+        return crate::index::partition_cuts_v0();
+    }
+    let mut values: Vec<i16> = references.iter().map(|r| r.vector[0]).collect();
+    values.sort_unstable();
+    let n = values.len();
+    let mut cuts = [0i16; 7];
+    for (i, slot) in cuts.iter_mut().enumerate() {
+        let idx = ((i + 1) * n) / 8;
+        let idx = idx.min(n - 1);
+        *slot = values[idx];
+    }
+    cuts
+}
+
 fn widest_dimension(min: &QueryVector, max: &QueryVector) -> usize {
     let mut best_dim = 0usize;
     let mut best_width = i16::MIN;
@@ -241,4 +304,44 @@ fn widest_dimension(min: &QueryVector, max: &QueryVector) -> usize {
         }
     }
     best_dim
+}
+
+fn variance_dimension(
+    references: &[Reference],
+    indices: &[usize],
+    min: &QueryVector,
+    max: &QueryVector,
+) -> usize {
+    let n = indices.len() as i128;
+    let mut best_dim = widest_dimension(min, max);
+    let mut best_score = i128::MIN;
+
+    for d in 0..DIMS {
+        if min[d] == max[d] {
+            continue;
+        }
+
+        let mut sum = 0i128;
+        let mut sum_sq = 0i128;
+        for &idx in indices {
+            let v = references[idx].vector[d] as i128;
+            sum += v;
+            sum_sq += v * v;
+        }
+
+        let score = n * sum_sq - sum * sum;
+        if score > best_score {
+            best_score = score;
+            best_dim = d;
+        }
+    }
+
+    best_dim
+}
+
+fn kd_split_strategy() -> KdSplitStrategy {
+    match std::env::var("RINHA_KD_SPLIT_STRATEGY").ok().as_deref() {
+        Some("variance") => KdSplitStrategy::Variance,
+        _ => KdSplitStrategy::Widest,
+    }
 }

@@ -1,5 +1,6 @@
 pub mod build;
 pub mod format;
+mod layout;
 
 #[cfg(test)]
 mod tests;
@@ -10,23 +11,55 @@ use std::mem;
 use std::os::fd::AsRawFd;
 use std::ptr;
 use std::slice;
+use std::sync::atomic::{AtomicI16, Ordering};
 
-const MAGIC: &[u8; 8] = b"RNSPCST1";
+const MAGIC: &[u8; 8] = b"RNSPCST2";
+const LEGACY_MAGIC: &[u8; 8] = b"RNSPCST1";
+
+static PARTITION_CUTS_V0: [AtomicI16; 7] = [
+    AtomicI16::new(104),
+    AtomicI16::new(199),
+    AtomicI16::new(293),
+    AtomicI16::new(388),
+    AtomicI16::new(481),
+    AtomicI16::new(3662),
+    AtomicI16::new(6828),
+];
+
+pub fn set_partition_cuts_v0(cuts: &[i16; 7]) {
+    for (i, &c) in cuts.iter().enumerate() {
+        PARTITION_CUTS_V0[i].store(c, Ordering::Relaxed);
+    }
+}
+
+#[inline]
+pub fn partition_cuts_v0() -> [i16; 7] {
+    let mut out = [0i16; 7];
+    for i in 0..7 {
+        out[i] = PARTITION_CUTS_V0[i].load(Ordering::Relaxed);
+    }
+    out
+}
 const LANES: usize = 8;
-const MAX_PARTITIONS: usize = 512;
+const KEY_LOOKUP_SIZE: usize = 256;
+const MAX_PARTITIONS: usize = KEY_LOOKUP_SIZE;
 const TREE_STACK_CAPACITY: usize = 128;
 
 pub struct SpecialistIndex {
     _mapping: MmapRegion,
     reference_count: usize,
-    partitions: Vec<Partition>,
-    nodes: Vec<Node>,
+    partitions_base: *const u8,
+    partition_count: usize,
+    key_to_partition: [i32; KEY_LOOKUP_SIZE],
+    partition_cuts_v0: [i16; 7],
+    nodes_base: *const u8,
+    node_count: usize,
     vectors: *const i16,
     vectors_len: usize,
     labels: *const u8,
     labels_len: usize,
     has_avx2: bool,
-    early_exit_threshold: i64,
+    early_exit_threshold: std::sync::atomic::AtomicI64,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -112,24 +145,6 @@ impl Drop for MmapRegion {
     }
 }
 
-#[derive(Clone)]
-struct Partition {
-    key: u32,
-    root: usize,
-    min: [i16; PACKED_DIMS],
-    max: [i16; PACKED_DIMS],
-}
-
-#[derive(Clone)]
-struct Node {
-    left: i32,
-    right: i32,
-    start: usize,
-    len: usize,
-    min: [i16; PACKED_DIMS],
-    max: [i16; PACKED_DIMS],
-}
-
 impl SpecialistIndex {
     pub fn open(path: &str) -> Result<Self, String> {
         let mapping = MmapRegion::open(path)?;
@@ -138,6 +153,11 @@ impl SpecialistIndex {
             return Err("file too short".to_string());
         }
         let magic: &[u8; 8] = bytes[..8].try_into().unwrap();
+        if magic == LEGACY_MAGIC {
+            return Err(
+                "legacy index format RNSPCST1 detected; rebuild the index with the current preprocess binary (now writes RNSPCST2)".to_string(),
+            );
+        }
         if magic != MAGIC {
             return Err(format!("unknown magic: {:?}", magic));
         }
@@ -155,6 +175,12 @@ impl SpecialistIndex {
         let node_count = read_i32(bytes, &mut cursor)? as usize;
         let total_blocks = read_i32(bytes, &mut cursor)? as usize;
 
+        let mut cuts = [0i16; 7];
+        for slot in &mut cuts {
+            *slot = read_i16(bytes, &mut cursor)?;
+        }
+        set_partition_cuts_v0(&cuts);
+
         if scale != SCALE as i32 {
             return Err(format!(
                 "invalid index scale: expected {}, got {}",
@@ -166,39 +192,32 @@ impl SpecialistIndex {
             return Err("invalid packed dimensions".to_string());
         }
 
-        let mut partitions = Vec::with_capacity(partition_count);
-        for _ in 0..partition_count {
-            let key = read_i32(bytes, &mut cursor)? as u32;
-            let root = read_i32(bytes, &mut cursor)? as usize;
-            let _start = read_i32(bytes, &mut cursor)?;
-            let _len = read_i32(bytes, &mut cursor)?;
-            let min = read_i16_array(bytes, &mut cursor)?;
-            let max = read_i16_array(bytes, &mut cursor)?;
-            partitions.push(Partition {
-                key,
-                root,
-                min,
-                max,
-            });
+        let partitions_base = unsafe { bytes.as_ptr().add(cursor) };
+        let partitions_bytes = partition_count
+            .checked_mul(layout::PARTITION_STRIDE)
+            .ok_or_else(|| "partition_count overflow".to_string())?;
+        if cursor + partitions_bytes > bytes.len() {
+            return Err("truncated partitions".to_string());
+        }
+        cursor += partitions_bytes;
+
+        // Map partition key -> partition index (in-file order) (key-first search).
+        let mut key_to_partition = [-1i32; KEY_LOOKUP_SIZE];
+        for idx in 0..partition_count {
+            let key = unsafe { layout::partition_key(partitions_base, idx) } as usize;
+            if key < KEY_LOOKUP_SIZE {
+                key_to_partition[key] = idx as i32;
+            }
         }
 
-        let mut nodes = Vec::with_capacity(node_count);
-        for _ in 0..node_count {
-            let left = read_i32(bytes, &mut cursor)?;
-            let right = read_i32(bytes, &mut cursor)?;
-            let start = read_i32(bytes, &mut cursor)? as usize;
-            let len = read_i32(bytes, &mut cursor)? as usize;
-            let min = read_i16_array(bytes, &mut cursor)?;
-            let max = read_i16_array(bytes, &mut cursor)?;
-            nodes.push(Node {
-                left,
-                right,
-                start,
-                len,
-                min,
-                max,
-            });
+        let nodes_base = unsafe { bytes.as_ptr().add(cursor) };
+        let nodes_bytes = node_count
+            .checked_mul(layout::NODE_STRIDE)
+            .ok_or_else(|| "node_count overflow".to_string())?;
+        if cursor + nodes_bytes > bytes.len() {
+            return Err("truncated nodes".to_string());
         }
+        cursor += nodes_bytes;
 
         let vectors_len = total_blocks * DIMS * LANES;
         let vectors_bytes = vectors_len * mem::size_of::<i16>();
@@ -218,21 +237,26 @@ impl SpecialistIndex {
         let labels = unsafe { bytes.as_ptr().add(cursor) };
 
         let has_avx2 = cfg!(target_arch = "x86_64") && std::arch::is_x86_feature_detected!("avx2");
-        let early_exit_threshold = std::env::var("RINHA_EARLY_EXIT_THRESHOLD")
+        let early_exit_threshold_val = std::env::var("RINHA_EARLY_EXIT_THRESHOLD")
             .ok()
             .and_then(|s| s.parse::<i64>().ok())
             .unwrap_or(0);
+        let early_exit_threshold = std::sync::atomic::AtomicI64::new(early_exit_threshold_val);
 
         eprintln!(
-            "[RNSPCST1] loaded: {} partitions, {} nodes, {} blocks, avx2={}, mode=key-first, early_exit={}",
-            partition_count, node_count, total_blocks, has_avx2, early_exit_threshold
+            "[RNSPCST2] loaded: {} partitions, {} nodes, {} blocks, avx2={}, mode=key-first, early_exit={}, cuts_v0={:?}",
+            partition_count, node_count, total_blocks, has_avx2, early_exit_threshold_val, cuts
         );
 
         let index = Self {
             _mapping: mapping,
             reference_count,
-            partitions,
-            nodes,
+            partitions_base,
+            partition_count,
+            key_to_partition,
+            partition_cuts_v0: cuts,
+            nodes_base,
+            node_count,
             vectors,
             vectors_len,
             labels,
@@ -242,6 +266,11 @@ impl SpecialistIndex {
         };
         index.advise_hugepages();
         Ok(index)
+    }
+
+    pub fn set_early_exit_threshold(&self, value: i64) {
+        self.early_exit_threshold
+            .store(value, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn predict_fraud_count(&self, query: &QueryVector) -> u8 {
@@ -257,8 +286,8 @@ impl SpecialistIndex {
     pub fn metadata(&self) -> IndexMetadata {
         IndexMetadata {
             reference_count: self.reference_count,
-            partition_count: self.partitions.len(),
-            node_count: self.nodes.len(),
+            partition_count: self.partition_count,
+            node_count: self.node_count,
             block_count: self.vectors_len / (DIMS * LANES),
         }
     }
@@ -280,6 +309,24 @@ impl SpecialistIndex {
         }
     }
 
+    pub fn pretouch_all(&self) {
+        let bytes = self._mapping.as_slice();
+        let mut checksum = 0u8;
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            checksum ^= unsafe { std::ptr::read_volatile(bytes.as_ptr().add(offset)) };
+            offset += 4096;
+        }
+        if let Some(last) = bytes.last() {
+            checksum ^= unsafe { std::ptr::read_volatile(last) };
+        }
+        eprintln!(
+            "pretouched index mapping ({} bytes, checksum={})",
+            bytes.len(),
+            checksum
+        );
+    }
+
     fn predict_fraud_count_inner(
         &self,
         query: &QueryVector,
@@ -288,33 +335,53 @@ impl SpecialistIndex {
         let mut best_dists = [i64::MAX; K];
         let mut best_labels = [0u8; K];
 
-        let query_key = compute_partition_key(query);
+        let query_key = compute_partition_key_with_cuts(query, &self.partition_cuts_v0);
+        let eet = self
+            .early_exit_threshold
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let exact_partition_idx = self.partition_idx_for_key(query_key);
+
+        if let Some(idx) = exact_partition_idx {
+            let root = unsafe { layout::partition_root(self.partitions_base, idx) };
+            let bound = lower_bound_box(
+                query,
+                unsafe { layout::partition_min(self.partitions_base, idx) },
+                unsafe { layout::partition_max(self.partitions_base, idx) },
+                self.has_avx2,
+            );
+            self.search_node_iterative(
+                root,
+                bound,
+                query,
+                &mut best_dists,
+                &mut best_labels,
+                stats.as_deref_mut(),
+            );
+            if eet > 0 && best_dists[K - 1] < eet {
+                return best_labels.iter().map(|&l| l as u32).sum::<u32>() as u8;
+            }
+        }
+
         let mut partition_entries = [(0i64, 0usize); MAX_PARTITIONS];
         let mut partition_len = 0usize;
 
-        for (idx, partition) in self.partitions.iter().enumerate() {
-            let bound = lower_bound_box(query, &partition.min, &partition.max, self.has_avx2);
-            if partition.key == query_key {
-                if bound < best_dists[K - 1] {
-                    self.search_node_iterative(
-                        partition.root,
-                        bound,
-                        query,
-                        &mut best_dists,
-                        &mut best_labels,
-                        stats.as_deref_mut(),
-                    );
-                }
-                if self.early_exit_threshold > 0 && best_dists[K - 1] < self.early_exit_threshold {
-                    return best_labels.iter().map(|&l| l as u32).sum::<u32>() as u8;
-                }
-            } else {
+        for idx in 0..self.partition_count {
+            if Some(idx) == exact_partition_idx {
+                continue;
+            }
+            let bound = lower_bound_box(
+                query,
+                unsafe { layout::partition_min(self.partitions_base, idx) },
+                unsafe { layout::partition_max(self.partitions_base, idx) },
+                self.has_avx2,
+            );
+            if bound < best_dists[K - 1] {
                 partition_entries[partition_len] = (bound, idx);
                 partition_len += 1;
             }
         }
 
-        partition_entries[..partition_len].sort_unstable_by_key(|&(bound, _)| bound);
+        sort_partition_entries(&mut partition_entries[..partition_len]);
 
         for i in 0..partition_len {
             let (bound, idx) = partition_entries[i];
@@ -322,19 +389,29 @@ impl SpecialistIndex {
                 break;
             }
             self.search_node_iterative(
-                self.partitions[idx].root,
+                unsafe { layout::partition_root(self.partitions_base, idx) },
                 bound,
                 query,
                 &mut best_dists,
                 &mut best_labels,
                 stats.as_deref_mut(),
             );
-            if self.early_exit_threshold > 0 && best_dists[K - 1] < self.early_exit_threshold {
+            if eet > 0 && best_dists[K - 1] < eet {
                 break;
             }
         }
 
         best_labels.iter().map(|&l| l as u32).sum::<u32>() as u8
+    }
+
+    #[inline(always)]
+    fn partition_idx_for_key(&self, key: u32) -> Option<usize> {
+        let idx = self
+            .key_to_partition
+            .get(key as usize)
+            .copied()
+            .unwrap_or(-1);
+        if idx >= 0 { Some(idx as usize) } else { None }
     }
 
     fn search_node_iterative(
@@ -359,32 +436,38 @@ impl SpecialistIndex {
 
         loop {
             if current_bound <= best_dists[K - 1] {
-                let node = &self.nodes[current];
                 if let Some(stats) = stats.as_deref_mut() {
                     stats.nodes_visited += 1;
                 }
-                if node.left < 0 || node.right < 0 {
-                    self.scan_leaf(node, query, best_dists, best_labels, stats.as_deref_mut());
+                let left = unsafe { layout::node_left(self.nodes_base, current) };
+                let right = unsafe { layout::node_right(self.nodes_base, current) };
+                if left < 0 || right < 0 {
+                    self.scan_leaf(current, query, best_dists, best_labels, stats.as_deref_mut());
                 } else {
-                    let l = node.left as usize;
-                    let r = node.right as usize;
+                    let l = left as usize;
+                    let r = right as usize;
 
                     #[cfg(target_arch = "x86_64")]
                     unsafe {
                         use std::arch::x86_64::*;
-                        _mm_prefetch((&self.nodes[r]) as *const _ as *const i8, _MM_HINT_T0);
+                        _mm_prefetch(
+                            self.nodes_base
+                                .add(r * layout::NODE_STRIDE)
+                                as *const i8,
+                            _MM_HINT_T0,
+                        );
                     }
 
                     let lb = lower_bound_box(
                         query,
-                        &self.nodes[l].min,
-                        &self.nodes[l].max,
+                        unsafe { layout::node_min(self.nodes_base, l) },
+                        unsafe { layout::node_max(self.nodes_base, l) },
                         self.has_avx2,
                     );
                     let rb = lower_bound_box(
                         query,
-                        &self.nodes[r].min,
-                        &self.nodes[r].max,
+                        unsafe { layout::node_min(self.nodes_base, r) },
+                        unsafe { layout::node_max(self.nodes_base, r) },
                         self.has_avx2,
                     );
 
@@ -420,14 +503,15 @@ impl SpecialistIndex {
 
     fn scan_leaf(
         &self,
-        node: &Node,
+        node_idx: usize,
         query: &QueryVector,
         best_dists: &mut [i64; K],
         best_labels: &mut [u8; K],
         stats: Option<&mut SearchStats>,
     ) {
-        let start_block = node.start;
-        let blocks = (node.len + LANES - 1) / LANES;
+        let start_block = unsafe { layout::node_start(self.nodes_base, node_idx) };
+        let node_len = unsafe { layout::node_len(self.nodes_base, node_idx) };
+        let blocks = (node_len + LANES - 1) / LANES;
         if let Some(stats) = stats {
             stats.leaves_scanned += 1;
             stats.blocks_scanned += blocks as u32;
@@ -468,7 +552,7 @@ impl SpecialistIndex {
                 scan_block_scalar(vectors, block_base, query)
             };
             let labels_base = block_idx * LANES;
-            let lane_count = (node.len - b * LANES).min(LANES);
+            let lane_count = (node_len - b * LANES).min(LANES);
             for i in 0..lane_count {
                 insert_best(dists[i], labels[labels_base + i], best_dists, best_labels);
             }
@@ -498,36 +582,60 @@ impl SpecialistIndex {
 }
 
 pub fn compute_partition_key(vector: &QueryVector) -> u32 {
+    compute_partition_key_with_cuts(vector, &partition_cuts_v0())
+}
+
+#[inline]
+fn compute_partition_key_with_cuts(vector: &QueryVector, cuts: &[i16; 7]) -> u32 {
     let mut key = 0u32;
-    if vector[5] >= 0 {
+    if vector[9] > 0 {
         key |= 1 << 0;
     }
-    if vector[9] > 0 {
+    if vector[10] > 0 {
         key |= 1 << 1;
     }
-    if vector[10] > 0 {
+    if vector[11] > 0 {
         key |= 1 << 2;
     }
-    if vector[11] > 0 {
+    if vector[8] > 2048 {
         key |= 1 << 3;
     }
-
-    let mcc_bucket = match vector[12] {
-        ..=2047 => 0,
-        2048..=4095 => 1,
-        4096..=6143 => 2,
-        _ => 3,
-    };
-    key |= mcc_bucket << 4;
-
     if vector[2] > 4096 {
-        key |= 1 << 6;
+        key |= 1 << 4;
     }
-    if vector[8] > 2048 {
-        key |= 1 << 7;
-    }
-
+    key |= bucket8_equifreq_v0(vector[0], cuts) << 5;
     key
+}
+
+#[inline]
+fn bucket8_equifreq_v0(value: i16, cuts: &[i16; 7]) -> u32 {
+    if value <= 0 {
+        return 0;
+    }
+    let mut bucket = 0u32;
+    for &c in cuts {
+        bucket += (value > c) as u32;
+    }
+    bucket
+}
+
+#[inline(always)]
+fn sort_partition_entries(entries: &mut [(i64, usize)]) {
+    let n = entries.len();
+    if n <= 1 {
+        return;
+    }
+    if n <= 32 {
+        for i in 1..n {
+            let mut j = i;
+            while j > 0 && entries[j - 1].0 > entries[j].0 {
+                entries.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        return;
+    }
+    entries.sort_unstable_by_key(|&(bound, _)| bound);
 }
 
 #[inline(always)]

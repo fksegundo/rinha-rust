@@ -32,6 +32,26 @@ mod tests {
     }
 
     #[test]
+    fn fast_path_matches_legacy_for_example_payloads() {
+        for (i, body) in EXAMPLE_PAYLOADS.iter().enumerate() {
+            let mut fast = [0i16; 16];
+            let mut legacy = [0i16; 16];
+
+            fast.fill(0);
+            assert!(
+                try_parse_single_pass(body, &mut fast).is_ok(),
+                "payload {} failed on fast path",
+                i
+            );
+
+            legacy.fill(0);
+            try_parse_serde(body, &mut legacy).expect("serde failed on example payload");
+
+            assert_eq!(fast, legacy, "payload {} mismatch", i);
+        }
+    }
+
+    #[test]
     fn equivalent_fallback_payloads_match_baseline() {
         let baseline = br#"{"id":"tx-1","transaction":{"amount":384.88,"installments":3,"requested_at":"2026-03-11T20:23:35Z"},"customer":{"avg_amount":769.76,"tx_count_24h":3,"known_merchants":["MERC-009","MERC-001"]},"merchant":{"id":"MERC-001","mcc":"5912","avg_amount":298.95},"terminal":{"is_online":false,"card_present":true,"km_from_home":13.7090520965},"last_transaction":{"timestamp":"2026-03-11T14:58:35Z","km_from_current":18.8626479774}}"#;
         let extra_fields = br#"{"id":"tx-1","unexpected_top_level":"ignored","transaction":{"amount":384.88,"installments":3,"requested_at":"2026-03-11T20:23:35Z","extra_transaction_field":123},"customer":{"avg_amount":769.76,"tx_count_24h":3,"known_merchants":["MERC-009","MERC-001"],"extra_customer_field":true},"merchant":{"id":"MERC-001","mcc":"5912","avg_amount":298.95,"extra_merchant_field":{"nested":"ignored"}},"terminal":{"is_online":false,"card_present":true,"km_from_home":13.7090520965,"extra_terminal_field":["ignored"]},"last_transaction":{"timestamp":"2026-03-11T14:58:35Z","km_from_current":18.8626479774,"extra_last_transaction_field":"ignored"}}"#;

@@ -9,14 +9,21 @@ impl IndexWriter {
         Self { buf: Vec::new() }
     }
 
-    pub fn write_header(&mut self, reference_count: i32) -> Result<(), String> {
-        self.buf.extend_from_slice(b"RNSPCST1");
+    pub fn write_header(
+        &mut self,
+        reference_count: i32,
+        partition_cuts_v0: &[i16; 7],
+    ) -> Result<(), String> {
+        self.buf.extend_from_slice(b"RNSPCST2");
         self.write_i32(SCALE as i32)?;
         self.write_i32(PACKED_DIMS as i32)?;
         self.write_i32(reference_count)?;
         self.write_i32(0)?;
         self.write_i32(0)?;
         self.write_i32(0)?;
+        for &c in partition_cuts_v0 {
+            self.write_i16(c)?;
+        }
         Ok(())
     }
 
