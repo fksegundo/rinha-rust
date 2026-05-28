@@ -23,7 +23,7 @@ services:
       resources:
         limits:
           cpus: "0.47"
-          memory: "170M"
+          memory: "165M"
 
   api2:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
@@ -49,7 +49,7 @@ services:
       resources:
         limits:
           cpus: "0.47"
-          memory: "170M"
+          memory: "165M"
 
   lb:
     image: ghcr.io/fksegundo/rinha-api-lb:latest
@@ -67,7 +67,7 @@ services:
       resources:
         limits:
           cpus: "0.06"
-          memory: "10M"
+          memory: "20M"
     depends_on:
       - api1
       - api2
