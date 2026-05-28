@@ -14,7 +14,7 @@ impl IndexWriter {
         reference_count: i32,
         partition_cuts_v0: &[i16; 7],
     ) -> Result<(), String> {
-        self.buf.extend_from_slice(b"RNSPCST2");
+        self.buf.extend_from_slice(b"RNSPCST3");
         self.write_i32(SCALE as i32)?;
         self.write_i32(PACKED_DIMS as i32)?;
         self.write_i32(reference_count)?;

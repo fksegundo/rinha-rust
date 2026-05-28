@@ -13,7 +13,7 @@ use std::ptr;
 use std::slice;
 use std::sync::atomic::{AtomicI16, Ordering};
 
-const MAGIC: &[u8; 8] = b"RNSPCST2";
+const MAGIC: &[u8; 8] = b"RNSPCST3";
 const LEGACY_MAGIC: &[u8; 8] = b"RNSPCST1";
 
 static PARTITION_CUTS_V0: [AtomicI16; 7] = [
@@ -60,7 +60,7 @@ pub struct SpecialistIndex {
     labels: *const u8,
     labels_len: usize,
     has_avx2: bool,
-    early_exit_threshold: std::sync::atomic::AtomicI64,
+    early_exit_threshold: std::sync::atomic::AtomicI32,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -240,12 +240,12 @@ impl SpecialistIndex {
         let has_avx2 = cfg!(target_arch = "x86_64") && std::arch::is_x86_feature_detected!("avx2");
         let early_exit_threshold_val = std::env::var("RINHA_EARLY_EXIT_THRESHOLD")
             .ok()
-            .and_then(|s| s.parse::<i64>().ok())
+            .and_then(|s| s.parse::<i32>().ok())
             .unwrap_or(0);
-        let early_exit_threshold = std::sync::atomic::AtomicI64::new(early_exit_threshold_val);
+        let early_exit_threshold = std::sync::atomic::AtomicI32::new(early_exit_threshold_val);
 
         eprintln!(
-            "[RNSPCST2] loaded: {} partitions, {} nodes, {} blocks, avx2={}, mode=key-first, early_exit={}, cuts_v0={:?}",
+            "[RNSPCST3] loaded: {} partitions, {} nodes, {} blocks, avx2={}, mode=key-first, early_exit={}, cuts_v0={:?}",
             partition_count, node_count, total_blocks, has_avx2, early_exit_threshold_val, cuts
         );
 
@@ -277,7 +277,7 @@ impl SpecialistIndex {
         Ok(index)
     }
 
-    pub fn set_early_exit_threshold(&self, value: i64) {
+    pub fn set_early_exit_threshold(&self, value: i32) {
         self.early_exit_threshold
             .store(value, std::sync::atomic::Ordering::Relaxed);
     }
@@ -341,7 +341,7 @@ impl SpecialistIndex {
         query: &QueryVector,
         mut stats: Option<&mut SearchStats>,
     ) -> u8 {
-        let mut best_dists = [i64::MAX; K];
+        let mut best_dists = [i32::MAX; K];
         let mut best_labels = [0u8; K];
 
         let query_key = compute_partition_key_with_cuts(query, &self.partition_cuts_v0);
@@ -371,7 +371,7 @@ impl SpecialistIndex {
             }
         }
 
-        let mut partition_entries = [(0i64, 0usize); MAX_PARTITIONS];
+        let mut partition_entries = [(0i32, 0usize); MAX_PARTITIONS];
         let mut partition_len = 0usize;
 
         for &key in &self.active_keys {
@@ -427,9 +427,9 @@ impl SpecialistIndex {
     fn search_node_iterative(
         &self,
         root: usize,
-        root_bound: i64,
+        root_bound: i32,
         query: &QueryVector,
-        best_dists: &mut [i64; K],
+        best_dists: &mut [i32; K],
         best_labels: &mut [u8; K],
         mut stats: Option<&mut SearchStats>,
     ) {
@@ -438,7 +438,7 @@ impl SpecialistIndex {
         }
 
         let mut stack_nodes = [0usize; TREE_STACK_CAPACITY];
-        let mut stack_bounds = [0i64; TREE_STACK_CAPACITY];
+        let mut stack_bounds = [0i32; TREE_STACK_CAPACITY];
         let mut stack_len = 0usize;
 
         let mut current = root;
@@ -519,7 +519,7 @@ impl SpecialistIndex {
         &self,
         node_idx: usize,
         query: &QueryVector,
-        best_dists: &mut [i64; K],
+        best_dists: &mut [i32; K],
         best_labels: &mut [u8; K],
         stats: Option<&mut SearchStats>,
     ) {
@@ -539,6 +539,8 @@ impl SpecialistIndex {
             blocks,
             self.vectors_len / (DIMS * LANES)
         );
+
+        let mut dists = [0i32; LANES];
 
         for b in 0..blocks {
             let block_idx = start_block + b;
@@ -560,15 +562,18 @@ impl SpecialistIndex {
                 }
             }
 
-            let dists = if self.has_avx2 {
-                scan_block_avx2(vectors, block_base, query)
+            let ok = if self.has_avx2 {
+                scan_block_avx2(vectors, block_base, query, best_dists[K - 1], &mut dists)
             } else {
-                scan_block_scalar(vectors, block_base, query)
+                scan_block_scalar(vectors, block_base, query, best_dists[K - 1], &mut dists)
             };
-            let labels_base = block_idx * LANES;
-            let lane_count = (node_len - b * LANES).min(LANES);
-            for i in 0..lane_count {
-                insert_best(dists[i], labels[labels_base + i], best_dists, best_labels);
+            
+            if ok {
+                let labels_base = block_idx * LANES;
+                let lane_count = (node_len - b * LANES).min(LANES);
+                for i in 0..lane_count {
+                    insert_best(dists[i], labels[labels_base + i], best_dists, best_labels);
+                }
             }
         }
     }
@@ -634,7 +639,7 @@ fn bucket8_equifreq_v0(value: i16, cuts: &[i16; 7]) -> u32 {
 }
 
 #[inline(always)]
-fn sort_partition_entries(entries: &mut [(i64, usize)]) {
+fn sort_partition_entries(entries: &mut [(i32, usize)]) {
     let n = entries.len();
     if n <= 1 {
         return;
@@ -653,7 +658,7 @@ fn sort_partition_entries(entries: &mut [(i64, usize)]) {
 }
 
 #[inline(always)]
-fn insert_best(dist: i64, label: u8, best_dists: &mut [i64; K], best_labels: &mut [u8; K]) {
+fn insert_best(dist: i32, label: u8, best_dists: &mut [i32; K], best_labels: &mut [u8; K]) {
     if dist >= best_dists[K - 1] {
         return;
     }
@@ -668,77 +673,120 @@ fn insert_best(dist: i64, label: u8, best_dists: &mut [i64; K], best_labels: &mu
 }
 
 #[inline(always)]
-fn scan_block_avx2(vectors: &[i16], block_base: usize, query: &QueryVector) -> [i64; LANES] {
+fn scan_block_avx2(
+    vectors: &[i16],
+    block_base: usize,
+    query: &QueryVector,
+    limit: i32,
+    block_dists: &mut [i32; LANES],
+) -> bool {
     #[cfg(target_arch = "x86_64")]
     unsafe {
         use std::arch::x86_64::*;
-        let mut sum64_lo = _mm256_setzero_si256();
-        let mut sum64_hi = _mm256_setzero_si256();
+        let mut sum = _mm256_setzero_si256();
+        let limit_minus_1 = _mm256_set1_epi32(limit - 1);
 
-        let mut sum32_lo = _mm_setzero_si128();
-        let mut sum32_hi = _mm_setzero_si128();
-
-        for d in (0..DIMS).step_by(2) {
-            let q_d = _mm_set1_epi16(query[d]);
-            let q_d1 = _mm_set1_epi16(query[d + 1]);
-
-            let v_ptr_d = vectors.as_ptr().add(block_base + d * LANES);
-            let v_ptr_d1 = vectors.as_ptr().add(block_base + (d + 1) * LANES);
-
-            let v_d = _mm_loadu_si128(v_ptr_d as *const __m128i);
-            let v_d1 = _mm_loadu_si128(v_ptr_d1 as *const __m128i);
-
-            let diff_d = _mm_sub_epi16(q_d, v_d);
-            let diff_d1 = _mm_sub_epi16(q_d1, v_d1);
-
-            let lo = _mm_unpacklo_epi16(diff_d, diff_d1);
-            let hi = _mm_unpackhi_epi16(diff_d, diff_d1);
-
-            let sq_lo = _mm_madd_epi16(lo, lo);
-            let sq_hi = _mm_madd_epi16(hi, hi);
-
-            sum32_lo = _mm_add_epi32(sum32_lo, sq_lo);
-            sum32_hi = _mm_add_epi32(sum32_hi, sq_hi);
-
-            if (d + 2) % 4 == 0 {
-                let lo_64 = _mm256_cvtepi32_epi64(sum32_lo);
-                let hi_64 = _mm256_cvtepi32_epi64(sum32_hi);
-                sum64_lo = _mm256_add_epi64(sum64_lo, lo_64);
-                sum64_hi = _mm256_add_epi64(sum64_hi, hi_64);
-
-                sum32_lo = _mm_setzero_si128();
-                sum32_hi = _mm_setzero_si128();
+        macro_rules! process_pair {
+            ($p:expr) => {
+                let q128 = _mm_setr_epi16(
+                    query[$p * 2], query[$p * 2 + 1],
+                    query[$p * 2], query[$p * 2 + 1],
+                    query[$p * 2], query[$p * 2 + 1],
+                    query[$p * 2], query[$p * 2 + 1],
+                );
+                let q = _mm256_insertf128_si256(_mm256_castsi128_si256(q128), q128, 1);
+                
+                let v_ptr = vectors.as_ptr().add(block_base + $p * LANES * 2);
+                let v = _mm256_loadu_si256(v_ptr as *const __m256i);
+                
+                let diff = _mm256_sub_epi16(q, v);
+                let sq = _mm256_madd_epi16(diff, diff);
+                sum = _mm256_add_epi32(sum, sq);
             }
         }
 
-        let lo_64 = _mm256_cvtepi32_epi64(sum32_lo);
-        let hi_64 = _mm256_cvtepi32_epi64(sum32_hi);
-        sum64_lo = _mm256_add_epi64(sum64_lo, lo_64);
-        sum64_hi = _mm256_add_epi64(sum64_hi, hi_64);
+        process_pair!(0);
+        process_pair!(1);
+        process_pair!(2);
 
-        let mut block_dists = [0i64; LANES];
-        _mm256_storeu_si256(block_dists.as_mut_ptr() as *mut __m256i, sum64_lo);
-        _mm256_storeu_si256(block_dists.as_mut_ptr().add(4) as *mut __m256i, sum64_hi);
+        let cmp = _mm256_cmpgt_epi32(sum, limit_minus_1);
+        let mask = _mm256_movemask_epi8(cmp) as u32;
+        if mask == 0xFFFFFFFF {
+            return false;
+        }
 
-        return block_dists;
+        process_pair!(3);
+        process_pair!(4);
+
+        let cmp = _mm256_cmpgt_epi32(sum, limit_minus_1);
+        let mask = _mm256_movemask_epi8(cmp) as u32;
+        if mask == 0xFFFFFFFF {
+            return false;
+        }
+
+        process_pair!(5);
+        process_pair!(6);
+
+        _mm256_storeu_si256(block_dists.as_mut_ptr() as *mut __m256i, sum);
+        true
     }
 
     #[cfg(not(target_arch = "x86_64"))]
-    scan_block_scalar(vectors, block_base, query)
+    scan_block_scalar(vectors, block_base, query, limit, block_dists)
 }
 
 #[inline(always)]
-fn scan_block_scalar(vectors: &[i16], block_base: usize, query: &QueryVector) -> [i64; LANES] {
-    let mut dists = [0i64; LANES];
-    for d in 0..DIMS {
-        let q = query[d] as i64;
-        let base = block_base + d * LANES;
-        for i in 0..LANES {
-            let diff = q - vectors[base + i] as i64;
-            dists[i] += diff * diff;
+fn scan_block_scalar(
+    vectors: &[i16],
+    block_base: usize,
+    query: &QueryVector,
+    limit: i32,
+    out_dists: &mut [i32; LANES],
+) -> bool {
+    out_dists.fill(0);
+    
+    for p in 0..3 {
+        let q0 = query[p * 2] as i32;
+        let q1 = query[p * 2 + 1] as i32;
+        let pair_offset = block_base + p * LANES * 2;
+        for l in 0..LANES {
+            let diff0 = q0 - vectors[pair_offset + l * 2] as i32;
+            let diff1 = q1 - vectors[pair_offset + l * 2 + 1] as i32;
+            out_dists[l] += diff0 * diff0 + diff1 * diff1;
         }
     }
-    dists
+    
+    if out_dists.iter().all(|&d| d >= limit) {
+        return false;
+    }
+
+    for p in 3..5 {
+        let q0 = query[p * 2] as i32;
+        let q1 = query[p * 2 + 1] as i32;
+        let pair_offset = block_base + p * LANES * 2;
+        for l in 0..LANES {
+            let diff0 = q0 - vectors[pair_offset + l * 2] as i32;
+            let diff1 = q1 - vectors[pair_offset + l * 2 + 1] as i32;
+            out_dists[l] += diff0 * diff0 + diff1 * diff1;
+        }
+    }
+
+    if out_dists.iter().all(|&d| d >= limit) {
+        return false;
+    }
+
+    for p in 5..7 {
+        let q0 = query[p * 2] as i32;
+        let q1 = query[p * 2 + 1] as i32;
+        let pair_offset = block_base + p * LANES * 2;
+        for l in 0..LANES {
+            let diff0 = q0 - vectors[pair_offset + l * 2] as i32;
+            let diff1 = q1 - vectors[pair_offset + l * 2 + 1] as i32;
+            out_dists[l] += diff0 * diff0 + diff1 * diff1;
+        }
+    }
+
+    true
 }
 
 #[inline(always)]
@@ -747,7 +795,7 @@ fn lower_bound_box(
     min: &QueryVector,
     max: &QueryVector,
     has_avx2: bool,
-) -> i64 {
+) -> i32 {
     #[cfg(target_arch = "x86_64")]
     if has_avx2 {
         return unsafe { lower_bound_box_avx2(query, min, max) };
@@ -757,41 +805,35 @@ fn lower_bound_box(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-unsafe fn lower_bound_box_avx2(query: &QueryVector, min: &QueryVector, max: &QueryVector) -> i64 {
+unsafe fn lower_bound_box_avx2(query: &QueryVector, min: &QueryVector, max: &QueryVector) -> i32 {
     use std::arch::x86_64::*;
-    unsafe {
-        let q = _mm256_loadu_si256(query.as_ptr() as *const __m256i);
-        let mn = _mm256_loadu_si256(min.as_ptr() as *const __m256i);
-        let mx = _mm256_loadu_si256(max.as_ptr() as *const __m256i);
+    let q = _mm256_loadu_si256(query.as_ptr() as *const __m256i);
+    let mn = _mm256_loadu_si256(min.as_ptr() as *const __m256i);
+    let mx = _mm256_loadu_si256(max.as_ptr() as *const __m256i);
 
-        let zero = _mm256_setzero_si256();
-        let below = _mm256_max_epi16(_mm256_sub_epi16(mn, q), zero);
-        let above = _mm256_max_epi16(_mm256_sub_epi16(q, mx), zero);
-        let diff = _mm256_max_epi16(below, above);
+    let zero = _mm256_setzero_si256();
+    let below = _mm256_max_epi16(_mm256_sub_epi16(mn, q), zero);
+    let above = _mm256_max_epi16(_mm256_sub_epi16(q, mx), zero);
+    let diff = _mm256_max_epi16(below, above);
 
-        let sq = _mm256_madd_epi16(diff, diff);
+    let sq = _mm256_madd_epi16(diff, diff);
 
-        let lo = _mm256_cvtepi32_epi64(_mm256_castsi256_si128(sq));
-        let hi = _mm256_cvtepi32_epi64(_mm256_extracti128_si256(sq, 1));
-        let sum64 = _mm256_add_epi64(lo, hi);
+    let sum128 = _mm_add_epi32(_mm256_castsi256_si128(sq), _mm256_extracti128_si256(sq, 1));
+    let temp = _mm_shuffle_epi32(sum128, 0x4E);
+    let sum128 = _mm_add_epi32(sum128, temp);
+    let temp2 = _mm_shuffle_epi32(sum128, 0xB1);
+    let sum128 = _mm_add_epi32(sum128, temp2);
 
-        let sum_hi = _mm256_extracti128_si256(sum64, 1);
-        let sum_128 = _mm_add_epi64(_mm256_castsi256_si128(sum64), sum_hi);
-
-        let s0 = _mm_extract_epi64(sum_128, 0);
-        let s1 = _mm_extract_epi64(sum_128, 1);
-
-        s0 + s1
-    }
+    _mm_cvtsi128_si32(sum128)
 }
 
 #[inline(always)]
-fn lower_bound_box_scalar(query: &QueryVector, min: &QueryVector, max: &QueryVector) -> i64 {
-    let mut sum = 0i64;
+fn lower_bound_box_scalar(query: &QueryVector, min: &QueryVector, max: &QueryVector) -> i32 {
+    let mut sum = 0i32;
     for d in 0..DIMS {
-        let q = query[d] as i64;
-        let lo = min[d] as i64;
-        let hi = max[d] as i64;
+        let q = query[d] as i32;
+        let lo = min[d] as i32;
+        let hi = max[d] as i32;
         let diff = if q < lo {
             lo - q
         } else if q > hi {

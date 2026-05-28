@@ -1,68 +1,80 @@
-version: "3.9"
 services:
   api1:
     image: rinha-rust-api:local
+    #pull_policy: always
+    cpuset: "0"
     restart: always
     logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
+      RINHA_PRETOUCH_INDEX: "1"
+      RINHA_MLOCK_INDEX: "1"
     volumes:
       - sockets:/sockets
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+      memlock:
+        soft: -1
+        hard: -1
     deploy:
       resources:
         limits:
-          cpus: "0.42"
-          memory: "165M"
+          cpus: "0.45"
+          memory: "170M"
 
   api2:
     image: rinha-rust-api:local
+    #pull_policy: always
+    cpuset: "1"
     restart: always
-    network_mode: "none"
     logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+      driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
+      RINHA_PRETOUCH_INDEX: "1"
+      RINHA_MLOCK_INDEX: "1"
     volumes:
       - sockets:/sockets
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+      memlock:
+        soft: -1
+        hard: -1
     deploy:
       resources:
         limits:
-          cpus: "0.42"
-          memory: "165M"
+          cpus: "0.45"
+          memory: "170M"
 
   lb:
     image: ghcr.io/fksegundo/rinha-api-lb:latest
     pull_policy: always
     restart: always
+    cpuset: "2,3"
     user: "0:0"
     ports:
       - "9999:9999"
     logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    environment:
-      PORT: "9999"
-      FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
-      WORKERS: "4"
+      driver: "none"
     volumes:
       - sockets:/sockets
     deploy:
       resources:
         limits:
-          cpus: "0.16"
-          memory: "20M"
+          cpus: "0.1"
+          memory: "10M"
     depends_on:
       - api1
       - api2
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
 
 volumes:
   sockets:

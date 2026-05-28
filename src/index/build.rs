@@ -160,10 +160,11 @@ pub fn build_index(
     writer.write_block_count(total_blocks as i32)?;
 
     for b in 0..total_blocks {
-        for d in 0..DIMS {
+        for p in 0..7 {
             for l in 0..LANES {
                 let (vec, _) = all_blocks[b * LANES + l];
-                writer.write_i16(vec[d])?;
+                writer.write_i16(vec[p * 2])?;
+                writer.write_i16(vec[p * 2 + 1])?;
             }
         }
     }

@@ -55,9 +55,18 @@ mod tests {
         }
 
         let mut vectors = vec![0i16; DIMS * LANES];
-        for d in 0..DIMS {
+        for p in 0..7 {
             for lane in 0..LANES {
-                vectors[d * LANES + lane] = match (d + lane) % 7 {
+                vectors[p * LANES * 2 + lane * 2] = match (p * 2 + lane) % 7 {
+                    0 => -(SCALE as i16),
+                    1 => -1234,
+                    2 => -1,
+                    3 => 0,
+                    4 => 1,
+                    5 => 4321,
+                    _ => SCALE as i16,
+                };
+                vectors[p * LANES * 2 + lane * 2 + 1] = match (p * 2 + 1 + lane) % 7 {
                     0 => -(SCALE as i16),
                     1 => -1234,
                     2 => -1,
@@ -90,10 +99,13 @@ mod tests {
         ];
 
         for query in queries {
-            assert_eq!(
-                scan_block_avx2(&vectors, 0, &query),
-                scan_block_scalar(&vectors, 0, &query)
-            );
+            let mut dists_avx2 = [0i32; LANES];
+            let mut dists_scalar = [0i32; LANES];
+            let limit = i32::MAX;
+            let ok_avx2 = scan_block_avx2(&vectors, 0, &query, limit, &mut dists_avx2);
+            let ok_scalar = scan_block_scalar(&vectors, 0, &query, limit, &mut dists_scalar);
+            assert_eq!(ok_avx2, ok_scalar);
+            assert_eq!(dists_avx2, dists_scalar);
         }
     }
 }
