@@ -67,7 +67,7 @@ services:
       resources:
         limits:
           cpus: "0.06"
-          memory: "6M"
+          memory: "10M"
     depends_on:
       - api1
       - api2
