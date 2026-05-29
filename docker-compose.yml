@@ -9,9 +9,6 @@ services:
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
       RINHA_FD_EVENTED: "1"
-      RINHA_CLIENT_FD_PRECONFIGURED: "1"
-      RINHA_BUF_POOL_INIT: "512"
-      RINHA_EPOLL_TIMEOUT_MS: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
       RINHA_SPIN_BEFORE_BLOCK_US: "50" 
@@ -27,7 +24,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.47"
           memory: "170M"
 
   api2:
@@ -40,9 +37,6 @@ services:
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
       RINHA_FD_EVENTED: "1"
-      RINHA_CLIENT_FD_PRECONFIGURED: "1"
-      RINHA_BUF_POOL_INIT: "512"
-      RINHA_EPOLL_TIMEOUT_MS: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
       RINHA_SPIN_BEFORE_BLOCK_US: "50" 
@@ -58,7 +52,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.47"
           memory: "170M"
 
   lb:
@@ -76,7 +70,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.1"
+          cpus: "0.06"
           memory: "10M"
     depends_on:
       - api1
