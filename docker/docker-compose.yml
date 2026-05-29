@@ -8,6 +8,13 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
+      RINHA_FD_EVENTED: "1"
+      RINHA_CLIENT_FD_PRECONFIGURED: "1"
+      RINHA_BUF_POOL_INIT: "512"
+      RINHA_EPOLL_TIMEOUT_MS: "1"
+      RINHA_MLOCK_INDEX: "1"
+      RINHA_PRETOUCH_INDEX: "1"
+      RINHA_SPIN_BEFORE_BLOCK_US: "50"
     volumes:
       - sockets:/sockets
     deploy:
@@ -25,6 +32,13 @@ services:
       driver: "none"
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
+      RINHA_FD_EVENTED: "1"
+      RINHA_CLIENT_FD_PRECONFIGURED: "1"
+      RINHA_BUF_POOL_INIT: "512"
+      RINHA_EPOLL_TIMEOUT_MS: "1"
+      RINHA_MLOCK_INDEX: "1"
+      RINHA_PRETOUCH_INDEX: "1"
+      RINHA_SPIN_BEFORE_BLOCK_US: "50"
     volumes:
       - sockets:/sockets
     deploy:

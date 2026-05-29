@@ -3,6 +3,7 @@ use std::io;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const CONTROL_TOKEN: u64 = u64::MAX - 1;
 const LISTENER_TOKEN: u64 = u64::MAX;
@@ -22,6 +23,8 @@ const EPIOCSPARAMS: libc::c_ulong = 0x40087001;
 
 struct ConnTable {
     slots: Vec<Option<ConnState>>,
+    /// Last `EPOLLIN` / `EPOLLOUT` registered for each fd (`None` = not in epoll).
+    epoll_interest: Vec<Option<i32>>,
     buf_pool: Vec<Box<[u8; BUF_SIZE]>>,
     buf_pool_cap: usize,
 }
@@ -38,6 +41,9 @@ impl ConnTable {
         let mut slots: Vec<Option<ConnState>> = Vec::with_capacity(MAX_CLIENT_FD);
         slots.resize_with(MAX_CLIENT_FD, || None);
 
+        let mut epoll_interest: Vec<Option<i32>> = Vec::with_capacity(MAX_CLIENT_FD);
+        epoll_interest.resize_with(MAX_CLIENT_FD, || None);
+
         let mut buf_pool = Vec::with_capacity(buf_pool_cap);
         for _ in 0..buf_pool_cap {
             buf_pool.push(Box::new([0u8; BUF_SIZE]));
@@ -45,8 +51,22 @@ impl ConnTable {
 
         Self {
             slots,
+            epoll_interest,
             buf_pool,
             buf_pool_cap,
+        }
+    }
+
+    #[inline(always)]
+    fn epoll_interest(&self, fd: RawFd) -> Option<i32> {
+        self.epoll_interest.get(fd as usize).copied().flatten()
+    }
+
+    #[inline(always)]
+    fn set_epoll_interest(&mut self, fd: RawFd, interest: Option<i32>) {
+        let idx = fd as usize;
+        if idx < self.epoll_interest.len() {
+            self.epoll_interest[idx] = interest;
         }
     }
 
@@ -134,6 +154,7 @@ where
 
     configure_epoll_busy_poll(epoll_fd);
     let epoll_timeout_ms = epoll_timeout_ms_from_env();
+    let spin_before_block_us = spin_before_block_us_from_env();
     let recv_fd_budget = recv_fd_budget_from_env();
     let accept_budget = accept_budget_from_env();
     let client_fd_preconfigured = client_fd_preconfigured_from_env();
@@ -150,8 +171,15 @@ where
     let mut events = [libc::epoll_event { events: 0, u64: 0 }; MAX_EVENTS as usize];
 
     loop {
-        let ready = unsafe {
-            libc::epoll_wait(epoll_fd, events.as_mut_ptr(), MAX_EVENTS, epoll_timeout_ms)
+        let ready = if spin_before_block_us > 0 {
+            epoll_wait_spin_then_block(
+                epoll_fd,
+                &mut events,
+                spin_before_block_us,
+                epoll_timeout_ms,
+            )
+        } else {
+            unsafe { libc::epoll_wait(epoll_fd, events.as_mut_ptr(), MAX_EVENTS, epoll_timeout_ms) }
         };
         if ready < 0 {
             let err = io::Error::last_os_error();
@@ -298,10 +326,10 @@ fn on_new_client_fd(
     let mut buf = conns.alloc_buf();
     match greedy_read(client_fd, &mut buf, 0) {
         ReadOutcome::Data(used) => {
-            drive_reading(epoll_fd, client_fd, handler, conns, buf, used, false);
+            drive_reading(epoll_fd, client_fd, handler, conns, buf, used);
         }
         ReadOutcome::WouldBlock => {
-            arm_epoll(epoll_fd, client_fd, libc::EPOLLIN, false);
+            conn_arm_epoll(conns, epoll_fd, client_fd, libc::EPOLLIN);
             conns.insert(client_fd, ConnState::Reading { buf, used: 0 });
         }
         ReadOutcome::Closed => {
@@ -324,7 +352,7 @@ fn on_readable(epoll_fd: RawFd, client_fd: RawFd, handler: &Arc<Handler>, conns:
     let mut buf = buf;
     match greedy_read(client_fd, &mut buf, used) {
         ReadOutcome::Data(used) => {
-            drive_reading(epoll_fd, client_fd, handler, conns, buf, used, true);
+            drive_reading(epoll_fd, client_fd, handler, conns, buf, used);
         }
         ReadOutcome::WouldBlock => {
             conns.insert(client_fd, ConnState::Reading { buf, used });
@@ -343,7 +371,6 @@ fn drive_reading(
     conns: &mut ConnTable,
     mut buf: Box<[u8; BUF_SIZE]>,
     mut used: usize,
-    registered: bool,
 ) {
     loop {
         if used >= BUF_SIZE {
@@ -357,7 +384,6 @@ fn drive_reading(
                 0,
                 0,
                 false,
-                registered,
             );
             return;
         }
@@ -383,13 +409,12 @@ fn drive_reading(
                         leftover_off,
                         leftover_len,
                         keep_alive,
-                        registered,
                     );
                     return;
                 }
                 BufferStep::RejectAndClose { response } => {
                     start_write(
-                        epoll_fd, client_fd, handler, conns, buf, response, 0, 0, false, registered,
+                        epoll_fd, client_fd, handler, conns, buf, response, 0, 0, false,
                     );
                     return;
                 }
@@ -398,7 +423,7 @@ fn drive_reading(
                         buf.copy_within(processed..used, 0);
                         used -= processed;
                     }
-                    arm_epoll(epoll_fd, client_fd, libc::EPOLLIN, registered);
+                    conn_arm_epoll(conns, epoll_fd, client_fd, libc::EPOLLIN);
                     conns.insert(client_fd, ConnState::Reading { buf, used });
                     return;
                 }
@@ -409,7 +434,7 @@ fn drive_reading(
             buf.copy_within(processed..used, 0);
             used -= processed;
         }
-        arm_epoll(epoll_fd, client_fd, libc::EPOLLIN, registered);
+        conn_arm_epoll(conns, epoll_fd, client_fd, libc::EPOLLIN);
         conns.insert(client_fd, ConnState::Reading { buf, used });
         return;
     }
@@ -425,7 +450,6 @@ fn start_write(
     leftover_off: usize,
     leftover_len: usize,
     keep_alive: bool,
-    registered: bool,
 ) {
     let state = ConnState::Writing {
         buf,
@@ -435,15 +459,15 @@ fn start_write(
         leftover_len,
         keep_alive,
     };
-    match finish_write(epoll_fd, client_fd, conns, state, registered) {
+    match finish_write(epoll_fd, client_fd, conns, state) {
         WriteOutcome::DoneReading { buf, used } => {
             if used > 0 {
-                drive_reading(epoll_fd, client_fd, handler, conns, buf, used, registered);
+                drive_reading(epoll_fd, client_fd, handler, conns, buf, used);
             } else if keep_alive {
-                arm_epoll(epoll_fd, client_fd, libc::EPOLLIN, registered);
+                conn_arm_epoll(conns, epoll_fd, client_fd, libc::EPOLLIN);
                 conns.insert(client_fd, ConnState::Reading { buf, used: 0 });
             } else {
-                shutdown_client(epoll_fd, client_fd, registered);
+                shutdown_client(epoll_fd, client_fd, conns);
             }
         }
         WriteOutcome::Wait(state) => {
@@ -463,12 +487,12 @@ fn on_writable(epoll_fd: RawFd, client_fd: RawFd, handler: &Arc<Handler>, conns:
         None => return,
     };
 
-    match finish_write(epoll_fd, client_fd, conns, state, true) {
+    match finish_write(epoll_fd, client_fd, conns, state) {
         WriteOutcome::DoneReading { buf, used } => {
             if used > 0 {
-                drive_reading(epoll_fd, client_fd, handler, conns, buf, used, true);
+                drive_reading(epoll_fd, client_fd, handler, conns, buf, used);
             } else {
-                arm_epoll(epoll_fd, client_fd, libc::EPOLLIN, true);
+                conn_arm_epoll(conns, epoll_fd, client_fd, libc::EPOLLIN);
                 conns.insert(client_fd, ConnState::Reading { buf, used: 0 });
             }
         }
@@ -493,7 +517,6 @@ fn finish_write(
     client_fd: RawFd,
     conns: &mut ConnTable,
     state: ConnState,
-    registered: bool,
 ) -> WriteOutcome {
     let ConnState::Writing {
         mut buf,
@@ -530,7 +553,7 @@ fn finish_write(
                 }
                 // Connection is closing: recycle buffer to reduce heap churn.
                 conns.recycle_buf(buf);
-                shutdown_client(epoll_fd, client_fd, registered);
+                shutdown_client(epoll_fd, client_fd, conns);
                 return WriteOutcome::Closed;
             }
             continue;
@@ -538,7 +561,7 @@ fn finish_write(
 
         let err = io::Error::last_os_error();
         if err.raw_os_error() == Some(libc::EAGAIN) {
-            arm_epoll(epoll_fd, client_fd, libc::EPOLLOUT, registered);
+            conn_arm_epoll(conns, epoll_fd, client_fd, libc::EPOLLOUT);
             return WriteOutcome::Wait(ConnState::Writing {
                 buf,
                 response,
@@ -551,14 +574,15 @@ fn finish_write(
 
         // Non-EAGAIN write error: recycle buffer since the connection is closing.
         conns.recycle_buf(buf);
-        shutdown_client(epoll_fd, client_fd, registered);
+        shutdown_client(epoll_fd, client_fd, conns);
         return WriteOutcome::Closed;
     }
 }
 
-fn shutdown_client(epoll_fd: RawFd, client_fd: RawFd, registered: bool) {
-    if registered {
+fn shutdown_client(epoll_fd: RawFd, client_fd: RawFd, conns: &mut ConnTable) {
+    if conns.epoll_interest(client_fd).is_some() {
         epoll_del(epoll_fd, client_fd);
+        conns.set_epoll_interest(client_fd, None);
     }
     unsafe { libc::close(client_fd) };
 }
@@ -567,7 +591,7 @@ fn close_conn(epoll_fd: RawFd, client_fd: RawFd, conns: &mut ConnTable) {
     if let Some(state) = conns.remove(client_fd) {
         conns.recycle_conn_state_buf(state);
     }
-    shutdown_client(epoll_fd, client_fd, true);
+    shutdown_client(epoll_fd, client_fd, conns);
 }
 
 fn epoll_timeout_ms_from_env() -> i32 {
@@ -748,12 +772,44 @@ fn epoll_mod(epoll_fd: RawFd, fd: RawFd, events: i32) {
     }
 }
 
-fn arm_epoll(epoll_fd: RawFd, fd: RawFd, events: i32, registered: bool) {
-    if registered {
+fn spin_before_block_us_from_env() -> u32 {
+    std::env::var("RINHA_SPIN_BEFORE_BLOCK_US")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
+
+/// Busy-poll epoll with timeout 0 before blocking, to avoid scheduler wakeup latency.
+fn epoll_wait_spin_then_block(
+    epoll_fd: RawFd,
+    events: &mut [libc::epoll_event],
+    spin_us: u32,
+    block_timeout_ms: i32,
+) -> i32 {
+    let deadline = Instant::now() + Duration::from_micros(spin_us as u64);
+    loop {
+        let ready = unsafe { libc::epoll_wait(epoll_fd, events.as_mut_ptr(), MAX_EVENTS, 0) };
+        if ready != 0 {
+            return ready;
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::hint::spin_loop();
+    }
+    unsafe { libc::epoll_wait(epoll_fd, events.as_mut_ptr(), MAX_EVENTS, block_timeout_ms) }
+}
+
+fn conn_arm_epoll(conns: &mut ConnTable, epoll_fd: RawFd, fd: RawFd, events: i32) {
+    if conns.epoll_interest(fd) == Some(events) {
+        return;
+    }
+    if conns.epoll_interest(fd).is_some() {
         epoll_mod(epoll_fd, fd, events);
     } else {
         epoll_add(epoll_fd, fd, fd as u64, events);
     }
+    conns.set_epoll_interest(fd, Some(events));
 }
 
 fn epoll_del(epoll_fd: RawFd, fd: RawFd) {

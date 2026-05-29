@@ -7,7 +7,7 @@ mod tests;
 
 use crate::{DIMS, K, PACKED_DIMS, QueryVector, SCALE};
 use std::fs::File;
-use std::mem;
+use std::mem::{self, MaybeUninit};
 use std::os::fd::AsRawFd;
 use std::ptr;
 use std::slice;
@@ -371,7 +371,8 @@ impl SpecialistIndex {
             }
         }
 
-        let mut partition_entries = [(0i64, 0usize); MAX_PARTITIONS];
+        let mut partition_entries: MaybeUninit<[(i64, usize); MAX_PARTITIONS]> = MaybeUninit::uninit();
+        let partition_entries_ptr = partition_entries.as_mut_ptr();
         let mut partition_len = 0usize;
 
         for &key in &self.active_keys {
@@ -386,15 +387,23 @@ impl SpecialistIndex {
                 self.has_avx2,
             );
             if bound < best_dists[K - 1] {
-                partition_entries[partition_len] = (bound, idx);
+                unsafe {
+                    (*partition_entries_ptr)[partition_len] = (bound, idx);
+                }
                 partition_len += 1;
             }
         }
 
-        sort_partition_entries(&mut partition_entries[..partition_len]);
+        let partition_entries_slice = unsafe {
+            std::slice::from_raw_parts_mut(
+                partition_entries_ptr as *mut (i64, usize),
+                partition_len,
+            )
+        };
+        sort_partition_entries(partition_entries_slice);
 
         for i in 0..partition_len {
-            let (bound, idx) = partition_entries[i];
+            let (bound, idx) = partition_entries_slice[i];
             if bound >= best_dists[K - 1] {
                 break;
             }
