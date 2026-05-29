@@ -567,7 +567,7 @@ impl SpecialistIndex {
             } else {
                 scan_block_scalar(vectors, block_base, query, best_dists[K - 1], &mut dists)
             };
-            
+
             if ok {
                 let labels_base = block_idx * LANES;
                 let lane_count = (node_len - b * LANES).min(LANES);
@@ -689,20 +689,24 @@ fn scan_block_avx2(
         macro_rules! process_pair {
             ($p:expr) => {
                 let q128 = _mm_setr_epi16(
-                    query[$p * 2], query[$p * 2 + 1],
-                    query[$p * 2], query[$p * 2 + 1],
-                    query[$p * 2], query[$p * 2 + 1],
-                    query[$p * 2], query[$p * 2 + 1],
+                    query[$p * 2],
+                    query[$p * 2 + 1],
+                    query[$p * 2],
+                    query[$p * 2 + 1],
+                    query[$p * 2],
+                    query[$p * 2 + 1],
+                    query[$p * 2],
+                    query[$p * 2 + 1],
                 );
                 let q = _mm256_insertf128_si256(_mm256_castsi128_si256(q128), q128, 1);
-                
+
                 let v_ptr = vectors.as_ptr().add(block_base + $p * LANES * 2);
                 let v = _mm256_loadu_si256(v_ptr as *const __m256i);
-                
+
                 let diff = _mm256_sub_epi16(q, v);
                 let sq = _mm256_madd_epi16(diff, diff);
                 sum = _mm256_add_epi32(sum, sq);
-            }
+            };
         }
 
         process_pair!(0);
@@ -744,7 +748,7 @@ fn scan_block_scalar(
     out_dists: &mut [i32; LANES],
 ) -> bool {
     out_dists.fill(0);
-    
+
     for p in 0..3 {
         let q0 = query[p * 2] as i32;
         let q1 = query[p * 2 + 1] as i32;
@@ -755,7 +759,7 @@ fn scan_block_scalar(
             out_dists[l] += diff0 * diff0 + diff1 * diff1;
         }
     }
-    
+
     if out_dists.iter().all(|&d| d >= limit) {
         return false;
     }
