@@ -85,7 +85,7 @@ services:
       - "9999:9999"
     logging:
       driver: "none"
-    enviroment:
+    environment:
       PORT: "9999"
       FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
       WORKERS: "1"
