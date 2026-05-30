@@ -11,7 +11,8 @@ services:
       RINHA_FD_EVENTED: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
-      RINHA_SPIN_BEFORE_BLOCK_US: "50" 
+      RINHA_SPIN_BEFORE_BLOCK_US: "30"
+      RINHA_EPOLL_TIMEOUT_MS: "1  
     volumes:
       - sockets:/sockets
     ulimits:
@@ -39,7 +40,8 @@ services:
       RINHA_FD_EVENTED: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
-      RINHA_SPIN_BEFORE_BLOCK_US: "50" 
+      RINHA_SPIN_BEFORE_BLOCK_US: "30"
+      RINHA_EPOLL_TIMEOUT_MS: "1"
     volumes:
       - sockets:/sockets
     ulimits:
