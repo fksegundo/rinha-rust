@@ -1,6 +1,6 @@
 services:
   api1:
-    image: filonsegundo/rinha-rust:pgo #tesst pgo - ghcr.io/fksegundo/rinha-rust-api:latest
+    image: filonsegundo/rinha-rust:no-pgo #tesst pgo - ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
     cpuset: "0"
     restart: always
@@ -31,7 +31,7 @@ services:
           memory: "170M"
 
   api2:
-    image: filonsegundo/rinha-rust:pgo # ghcr.io/fksegundo/rinha-rust-api:latest
+    image: filonsegundo/rinha-rust:no-pgo # ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
     cpuset: "1"
     restart: always
