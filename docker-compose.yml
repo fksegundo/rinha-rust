@@ -1,6 +1,6 @@
 services:
   api1:
-    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    image: filonsegundo/rinha-rust:no-pgo #tesst pgo - ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
     cpuset: "0"
     restart: always
@@ -12,7 +12,10 @@ services:
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
       RINHA_SPIN_BEFORE_BLOCK_US: "30"
-      RINHA_EPOLL_TIMEOUT_MS: "1  
+      RINHA_EPOLL_TIMEOUT_MS: "1
+      RINHA_FASTPATH: "1"
+      RINHA_TREE_ROUTE: "1"
+      RINHA_TREE_ROUTE_MARGIN: "1"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -25,11 +28,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.47"
+          cpus: "0.45"
           memory: "170M"
 
   api2:
-    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    image: filonsegundo/rinha-rust:no-pgo # ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
     cpuset: "1"
     restart: always
@@ -42,6 +45,9 @@ services:
       RINHA_PRETOUCH_INDEX: "1"
       RINHA_SPIN_BEFORE_BLOCK_US: "30"
       RINHA_EPOLL_TIMEOUT_MS: "1"
+      RINHA_FASTPATH: "1"
+      RINHA_TREE_ROUTE: "1"
+      RINHA_TREE_ROUTE_MARGIN: "1"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -54,7 +60,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.47"
+          cpus: "0.45"
           memory: "170M"
 
   lb:
@@ -72,7 +78,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.06"
+          cpus: "0.1"
           memory: "10M"
     depends_on:
       - api1
