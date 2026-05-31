@@ -15,10 +15,10 @@ services:
       RINHA_ASSUME_KEEP_ALIVE: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
-      RINHA_SPIN_BEFORE_BLOCK_US: "20"
-      RINHA_BUSY_POLL_US: "35"
-      RINHA_BUSY_POLL_BUDGET: "8"
-      RINHA_PREFER_BUSY_POLL: "1"
+      #RINHA_SPIN_BEFORE_BLOCK_US: "20"
+      #RINHA_BUSY_POLL_US: "35"
+      #RINHA_BUSY_POLL_BUDGET: "8"
+      #RINHA_PREFER_BUSY_POLL: "1"
       RINHA_FASTPATH: "1"
       RINHA_TREE_ROUTE: "1"
       RINHA_TREE_ROUTE_MARGIN: "1"
@@ -39,7 +39,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.49"
           memory: "170M"
 
   api2:
@@ -58,10 +58,10 @@ services:
       RINHA_ASSUME_KEEP_ALIVE: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
-      RINHA_SPIN_BEFORE_BLOCK_US: "20"
-      RINHA_BUSY_POLL_US: "35"
-      RINHA_BUSY_POLL_BUDGET: "8"
-      RINHA_PREFER_BUSY_POLL: "1"
+      #RINHA_SPIN_BEFORE_BLOCK_US: "20"
+      #RINHA_BUSY_POLL_US: "35"
+      #RINHA_BUSY_POLL_BUDGET: "8"
+      #RINHA_PREFER_BUSY_POLL: "1"
       RINHA_FASTPATH: "1"
       RINHA_TREE_ROUTE: "1"
       RINHA_TREE_ROUTE_MARGIN: "1"
@@ -82,7 +82,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.49"
           memory: "170M"
 
   lb:
@@ -99,11 +99,11 @@ services:
       PORT: "9999"
       FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
       WORKERS: "1"
-      LB_ACCEPT_BATCH: "64"
+      LB_ACCEPT_BATCH: "32"
       LB_TCP_DEFER_ACCEPT: "1"
-      LB_BUSY_POLL_US: "20"
-      LB_BUSY_POLL_BUDGET: "8"
-      LB_PREFER_BUSY_POLL: "1"
+      #LB_BUSY_POLL_US: "20"
+      #LB_BUSY_POLL_BUDGET: "8"
+      #LB_PREFER_BUSY_POLL: "1"
       LB_SKIP_ACCEPT_TCP_OPTS: "0"
       LB_SELF_WARM_REQUESTS: "128"
     volumes:
@@ -111,7 +111,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.1"
+          cpus: "0.02"
           memory: "10M"
     depends_on:
       - api1
