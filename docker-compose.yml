@@ -34,7 +34,7 @@ services:
           memory: "170M"
 
   api2:
-    image: filonsegundo/rinha-rust:no-pgo #ghcr.io/fksegundo/rinha-rust-api:latest
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
     pull_policy: always
     cpuset: "1"
     restart: always
@@ -81,7 +81,7 @@ services:
       PORT: "9999"
       FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
       WORKERS: "1"
-      LB_ACCEPT_BATCH: "32"
+      LB_ACCEPT_BATCH: "64"
       LB_TCP_DEFER_ACCEPT: "1"
       LB_SKIP_ACCEPT_TCP_OPTS: "0"
       LB_SELF_WARM_REQUESTS: "128"
