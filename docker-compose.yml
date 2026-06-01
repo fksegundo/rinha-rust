@@ -1,7 +1,6 @@
 services:
   api1:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
-    pull_policy: always
     cpuset: "0"
     restart: always
     logging:
@@ -9,15 +8,10 @@ services:
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
       RINHA_FD_EVENTED: "1"
-      RINHA_CLIENT_FD_PRECONFIGURED: "1"
-      RINHA_BUF_POOL_INIT: "512"
-      RINHA_ASSUME_KEEP_ALIVE: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
-      RINHA_SOCKET_WARMUP: "1"
-      RINHA_SOCKET_WARMUP_REQUESTS: "256"
-      RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
-      RINHA_WARMUP_QUERIES: "256"
+      RINHA_SPIN_BEFORE_BLOCK_US: "30"
+      RINHA_EPOLL_TIMEOUT_MS: "1  
     volumes:
       - sockets:/sockets
     ulimits:
@@ -31,11 +25,10 @@ services:
       resources:
         limits:
           cpus: "0.45"
-          memory: "170M"
+          memory: "169M"
 
   api2:
     image: ghcr.io/fksegundo/rinha-rust-api:latest
-    pull_policy: always
     cpuset: "1"
     restart: always
     logging:
@@ -43,15 +36,10 @@ services:
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
       RINHA_FD_EVENTED: "1"
-      RINHA_CLIENT_FD_PRECONFIGURED: "1"
-      RINHA_BUF_POOL_INIT: "512"
-      RINHA_ASSUME_KEEP_ALIVE: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
-      RINHA_SOCKET_WARMUP: "1"
-      RINHA_SOCKET_WARMUP_REQUESTS: "256"
-      RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
-      RINHA_WARMUP_QUERIES: "256"
+      RINHA_SPIN_BEFORE_BLOCK_US: "30"
+      RINHA_EPOLL_TIMEOUT_MS: "1"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -65,11 +53,10 @@ services:
       resources:
         limits:
           cpus: "0.45"
-          memory: "170M"
+          memory: "169M"
 
   lb:
     image: ghcr.io/fksegundo/rinha-api-lb:latest
-    pull_policy: always
     restart: always
     cpuset: "2,3"
     user: "0:0"
@@ -77,21 +64,13 @@ services:
       - "9999:9999"
     logging:
       driver: "none"
-    environment:
-      PORT: "9999"
-      FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
-      WORKERS: "1"
-      LB_ACCEPT_BATCH: "64"
-      LB_TCP_DEFER_ACCEPT: "1"
-      LB_SKIP_ACCEPT_TCP_OPTS: "0"
-      LB_SELF_WARM_REQUESTS: "128"
     volumes:
       - sockets:/sockets
     deploy:
       resources:
         limits:
           cpus: "0.1"
-          memory: "6M"
+          memory: "8M"
     depends_on:
       - api1
       - api2
@@ -107,4 +86,3 @@ volumes:
       type: tmpfs
       device: tmpfs
       o: size=4m
-
