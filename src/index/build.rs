@@ -1,5 +1,5 @@
 use crate::index::format::IndexWriter;
-use crate::index::{compute_partition_key, set_partition_cuts_v0};
+use crate::index::partition_scheme::PartitionScheme;
 use crate::{DIMS, PACKED_DIMS, QueryVector, SCALE};
 use flate2::read::GzDecoder;
 use std::collections::HashMap;
@@ -94,23 +94,28 @@ pub fn build_index(
     references: Vec<Reference>,
     leaf_size: usize,
     _flat_threshold: usize,
+    scheme: PartitionScheme,
 ) -> Result<Vec<u8>, String> {
     let leaf_size = leaf_size.clamp(LANES, 2048);
     let split_strategy = kd_split_strategy();
 
-    let cuts = compute_v0_cuts(&references);
-    set_partition_cuts_v0(&cuts);
+    let cuts = scheme.compute_cuts(&references);
     eprintln!(
-        "[build] v[0] equi-freq cuts: {:?} (will be persisted in header), kd_split={:?}",
-        cuts, split_strategy
+        "[build] scheme={} amount_cuts={} dow_cuts={} total_cuts={} (persisted in header), kd_split={:?}",
+        scheme.name, scheme.amount_cut_count, scheme.dow_cut_count, cuts.len(), split_strategy
     );
 
     let mut writer = IndexWriter::new();
-    writer.write_header(references.len() as i32, &cuts)?;
+    writer.write_header(
+        references.len() as i32,
+        scheme.amount_cut_count as i16,
+        scheme.dow_cut_count as i16,
+        &cuts,
+    )?;
 
     let mut partitions: HashMap<u32, Vec<usize>> = HashMap::new();
     for (idx, ref_item) in references.iter().enumerate() {
-        let key = compute_partition_key(&ref_item.vector);
+        let key = scheme.compute_key(&ref_item.vector, &cuts);
         partitions.entry(key).or_default().push(idx);
     }
 
@@ -277,11 +282,11 @@ fn build_node(
     node_idx
 }
 
-fn compute_v0_cuts(references: &[Reference]) -> [i16; 7] {
+fn compute_equifreq_cuts(references: &[Reference], dim: usize) -> [i16; 7] {
     if references.len() < 8 {
         return crate::index::partition_cuts_v0();
     }
-    let mut values: Vec<i16> = references.iter().map(|r| r.vector[0]).collect();
+    let mut values: Vec<i16> = references.iter().map(|r| r.vector[dim]).collect();
     values.sort_unstable();
     let n = values.len();
     let mut cuts = [0i16; 7];

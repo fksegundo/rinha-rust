@@ -24,11 +24,13 @@ COPY --from=build /app/target/release/preprocess /app/preprocess
 COPY --from=build /app/target/release/api /app/api
 
 ARG REFERENCES_URL=https://github.com/zanfranceschi/rinha-de-backend-2026/raw/main/resources/references.json.gz
-ARG RINHA_NATIVE_LEAF_SIZE=48
+ARG RINHA_NATIVE_LEAF_SIZE=56
+ARG RINHA_PARTITION_SCHEME=amt16_dow7
 RUN curl -L -o /app/references.json.gz ${REFERENCES_URL}
 
 RUN mkdir -p /app/index && \
     RINHA_LEAF_SIZE=${RINHA_NATIVE_LEAF_SIZE} \
+    RINHA_PARTITION_SCHEME=${RINHA_PARTITION_SCHEME} \
     /app/preprocess /app/references.json.gz /app/index/rinha-specialist.idx
 
 FROM debian:bookworm-slim AS runtime

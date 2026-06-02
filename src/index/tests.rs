@@ -3,6 +3,7 @@ mod tests {
     use crate::DIMS;
     use crate::index::SpecialistIndex;
     use crate::index::build::{Reference, build_index};
+    use crate::index::partition_scheme::PartitionScheme;
     #[cfg(target_arch = "x86_64")]
     use crate::index::{LANES, scan_block_avx2, scan_block_scalar};
     use crate::vector;
@@ -27,7 +28,7 @@ mod tests {
                 label: 1,
             },
         ];
-        let index_bytes = build_index(references, 64, 0).expect("failed to build index");
+        let index_bytes = build_index(references, 64, 0, PartitionScheme::recommended()).expect("failed to build index");
         std::fs::write(index_path, index_bytes).expect("failed to write test index");
 
         let index = SpecialistIndex::open(index_path).expect("failed to open index");
