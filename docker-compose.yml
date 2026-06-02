@@ -8,10 +8,19 @@ services:
     environment:
       RINHA_FD_SOCKET: /sockets/api1.sock
       RINHA_FD_EVENTED: "1"
+      RINHA_CLIENT_FD_PRECONFIGURED: "1"
+      RINHA_BUF_POOL_INIT: "512"
+      RINHA_EPOLL_TIMEOUT_MS: "1"
+      RINHA_ASSUME_KEEP_ALIVE: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
-      RINHA_SPIN_BEFORE_BLOCK_US: "30"
-      RINHA_EPOLL_TIMEOUT_MS: "1  
+      RINHA_BUSY_POLL_US: "50"
+      RINHA_BUSY_POLL_BUDGET: "8"
+      RINHA_PREFER_BUSY_POLL: "1"
+      RINHA_SOCKET_WARMUP: "1"
+      RINHA_SOCKET_WARMUP_REQUESTS: "256"
+      RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
+      RINHA_WARMUP_QUERIES: "256"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -36,10 +45,19 @@ services:
     environment:
       RINHA_FD_SOCKET: /sockets/api2.sock
       RINHA_FD_EVENTED: "1"
+      RINHA_CLIENT_FD_PRECONFIGURED: "1"
+      RINHA_BUF_POOL_INIT: "512"
+      RINHA_EPOLL_TIMEOUT_MS: "1"
+      RINHA_ASSUME_KEEP_ALIVE: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
-      RINHA_SPIN_BEFORE_BLOCK_US: "30"
-      RINHA_EPOLL_TIMEOUT_MS: "1"
+      RINHA_BUSY_POLL_US: "50"
+      RINHA_BUSY_POLL_BUDGET: "8"
+      RINHA_PREFER_BUSY_POLL: "1"
+      RINHA_SOCKET_WARMUP: "1"
+      RINHA_SOCKET_WARMUP_REQUESTS: "256"
+      RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
+      RINHA_WARMUP_QUERIES: "256"
     volumes:
       - sockets:/sockets
     ulimits:
@@ -66,6 +84,17 @@ services:
       driver: "none"
     volumes:
       - sockets:/sockets
+    environment:
+      PORT: "9999"
+      FD_UPSTREAMS: /sockets/api1.sock,/sockets/api2.sock
+      WORKERS: "1"
+      LB_ACCEPT_BATCH: "64"
+      LB_TCP_DEFER_ACCEPT: "1"
+      LB_BUSY_POLL_US: "50"
+      LB_BUSY_POLL_BUDGET: "8"
+      LB_PREFER_BUSY_POLL: "1"
+      LB_SKIP_ACCEPT_TCP_OPTS: "0"
+      LB_SELF_WARM_REQUESTS: "128"
     deploy:
       resources:
         limits:
