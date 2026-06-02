@@ -1,36 +1,28 @@
-# Compose para branch submission de fksegundo/rinha-rust (teste Mac Mini via issue).
-# Imagens: Docker Hub — tag sobrescrita por scripts/macmini-push.sh
 services:
   api1:
-    image: filonsegundo/rinha-dotnet:net-qw1
-    cpuset: "0"
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    pull_policy: always
     restart: always
+    hostname: api1
+    cpuset: "0"
     logging:
       driver: "none"
     environment:
-      RINHA_RUNTIME: "event-loop"
-      RINHA_FD_SOCKET: /sockets/api1.sock
-      RINHA_INDEX_PATH: /app/index/rinha-specialist.idx
-      RINHA_PRETOUCH_INDEX: "1"
+      API_SOCKET_PREFIX: /sockets/api1
+      API_WORKERS: "1"
       RINHA_MLOCK_INDEX: "1"
-      RINHA_CLIENT_FD_PRECONFIGURED: "1"
-      RINHA_THREAD_POOL_SIZE: "1"
-      RINHA_MAX_SECONDARY_PARTITIONS: "0"
-      RINHA_BUSY_POLL_US: "50"
-      RINHA_BUSY_POLL_BUDGET: "8"
-      RINHA_PREFER_BUSY_POLL: "1"
-      RINHA_EPOLL_TIMEOUT_MS: "1"
-      DOTNET_gcServer: "0"
-      MALLOC_ARENA_MAX: "2"
-    volumes:
-      - sockets:/sockets
+      RINHA_PRETOUCH_INDEX: "1"
+      RINHA_SOCKET_WARMUP: "1"
+      RINHA_SOCKET_WARMUP_REQUESTS: "256"
+      RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
+      RINHA_WARMUP_QUERIES: "256"
     ulimits:
       nofile:
         soft: 65535
         hard: 65535
-      memlock:
-        soft: -1
-        hard: -1
+      memlock: -1
+    volumes:
+      - sockets:/sockets
     deploy:
       resources:
         limits:
@@ -38,36 +30,29 @@ services:
           memory: "169M"
 
   api2:
-    image: filonsegundo/rinha-dotnet:net-qw1
-    cpuset: "1"
+    image: ghcr.io/fksegundo/rinha-rust-api:latest
+    pull_policy: always
     restart: always
-    network_mode: "none"
+    hostname: api2
+    cpuset: "1"
     logging:
       driver: "none"
     environment:
-      RINHA_RUNTIME: "event-loop"
-      RINHA_FD_SOCKET: /sockets/api2.sock
-      RINHA_INDEX_PATH: /app/index/rinha-specialist.idx
-      RINHA_PRETOUCH_INDEX: "1"
+      API_SOCKET_PREFIX: /sockets/api2
+      API_WORKERS: "1"
       RINHA_MLOCK_INDEX: "1"
-      RINHA_CLIENT_FD_PRECONFIGURED: "1"
-      RINHA_THREAD_POOL_SIZE: "1"
-      RINHA_MAX_SECONDARY_PARTITIONS: "0"
-      RINHA_BUSY_POLL_US: "50"
-      RINHA_BUSY_POLL_BUDGET: "8"
-      RINHA_PREFER_BUSY_POLL: "1"
-      RINHA_EPOLL_TIMEOUT_MS: "1"
-      DOTNET_gcServer: "0"
-      MALLOC_ARENA_MAX: "2"
-    volumes:
-      - sockets:/sockets
+      RINHA_PRETOUCH_INDEX: "1"
+      RINHA_SOCKET_WARMUP: "1"
+      RINHA_SOCKET_WARMUP_REQUESTS: "256"
+      RINHA_PAYLOAD_WARMUP_REQUESTS: "256"
+      RINHA_WARMUP_QUERIES: "256"
     ulimits:
       nofile:
         soft: 65535
         hard: 65535
-      memlock:
-        soft: -1
-        hard: -1
+      memlock: -1
+    volumes:
+      - sockets:/sockets
     deploy:
       resources:
         limits:
@@ -75,28 +60,31 @@ services:
           memory: "169M"
 
   lb:
-    image: filonsegundo/rinha-dotnet-lb:net-qw1
+    image: ghcr.io/fksegundo/rinha-rust-lb:latest
+    pull_policy: always
     restart: always
-    cpuset: "2,3"
     user: "0:0"
+    cpuset: "2,3"
     ports:
       - "9999:9999"
     logging:
       driver: "none"
+    environment:
+      API_SOCKETS: /sockets/api1.sock,/sockets/api2.sock
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     volumes:
       - sockets:/sockets
     deploy:
       resources:
         limits:
-          cpus: "0.1"
+          cpus: "0.10"
           memory: "8M"
     depends_on:
       - api1
       - api2
-    ulimits:
-      nofile:
-        soft: 65535
-        hard: 65535
 
 volumes:
   sockets:
@@ -104,4 +92,4 @@ volumes:
     driver_opts:
       type: tmpfs
       device: tmpfs
-      o: size=4m
+      o: size=4m,uid=0,gid=0,mode=0777
