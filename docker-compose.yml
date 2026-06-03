@@ -11,7 +11,6 @@ services:
       API_WORKERS: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
-      RINHA_SOCKET_WARMUP: "1"
     ulimits:
       nofile:
         soft: 65535
@@ -22,7 +21,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.47"
+          cpus: "0.375"
           memory: "169M"
 
   api2:
@@ -37,7 +36,6 @@ services:
       API_WORKERS: "1"
       RINHA_MLOCK_INDEX: "1"
       RINHA_PRETOUCH_INDEX: "1"
-      RINHA_SOCKET_WARMUP: "1"
     ulimits:
       nofile:
         soft: 65535
@@ -48,7 +46,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.47"
+          cpus: "0.375"
           memory: "169M"
 
   lb:
@@ -71,7 +69,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.06"
+          cpus: "0.25"
           memory: "8M"
     depends_on:
       - api1
