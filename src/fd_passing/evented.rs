@@ -1,7 +1,6 @@
 use crate::http::{self, BUF_SIZE, BufferStep, Request};
 use std::io;
-use std::os::fd::{AsRawFd, RawFd};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::fd::RawFd;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -34,7 +33,7 @@ impl ConnTable {
         let buf_pool_cap = std::env::var("RINHA_BUF_POOL_INIT")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(0);
+            .unwrap_or(512);
 
         // Pre-allocate the full FD index to avoid Vec resize/realloc during the benchmark.
         // This reduces tail outliers caused by occasional large FD values.
@@ -131,20 +130,27 @@ pub fn run_fd_evented_server<F>(socket_path: &str, handler: F)
 where
     F: Fn(&Request) -> &'static [u8] + Send + Sync + 'static,
 {
+    run_fd_evented_server_with_hook(socket_path, handler, None::<fn()>);
+}
+
+pub fn run_fd_evented_server_with_hook<F, H>(
+    socket_path: &str,
+    handler: F,
+    mut on_listening: Option<H>,
+) where
+    F: Fn(&Request) -> &'static [u8] + Send + Sync + 'static,
+    H: FnOnce(),
+{
     ignore_sigpipe();
 
     let handler: Arc<Handler> = Arc::new(handler);
-    let _ = std::fs::remove_file(socket_path);
-
-    let listener = match UnixListener::bind(socket_path) {
-        Ok(l) => l,
+    let listener_fd = match bind_seqpacket_listener(socket_path) {
+        Ok(fd) => fd,
         Err(e) => {
             eprintln!("failed to bind fd socket {}: {}", socket_path, e);
             return;
         }
     };
-
-    set_nonblocking(listener.as_raw_fd()).ok();
 
     let epoll_fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
     if epoll_fd < 0 {
@@ -153,33 +159,26 @@ where
     }
 
     configure_epoll_busy_poll(epoll_fd);
-    let epoll_timeout_ms = epoll_timeout_ms_from_env();
+    let epoll_idle_us = epoll_idle_us_from_env();
     let spin_before_block_us = spin_before_block_us_from_env();
     let recv_fd_budget = recv_fd_budget_from_env();
     let accept_budget = accept_budget_from_env();
     let client_fd_preconfigured = client_fd_preconfigured_from_env();
 
-    epoll_add(
-        epoll_fd,
-        listener.as_raw_fd(),
-        LISTENER_TOKEN,
-        libc::EPOLLIN,
-    );
+    epoll_add(epoll_fd, listener_fd, LISTENER_TOKEN, libc::EPOLLIN);
 
-    let mut control: Option<UnixStream> = None;
+    let mut control: Option<RawFd> = None;
     let mut conns = ConnTable::new();
     let mut events = [libc::epoll_event { events: 0, u64: 0 }; MAX_EVENTS as usize];
 
     loop {
+        if let Some(hook) = on_listening.take() {
+            hook();
+        }
         let ready = if spin_before_block_us > 0 {
-            epoll_wait_spin_then_block(
-                epoll_fd,
-                &mut events,
-                spin_before_block_us,
-                epoll_timeout_ms,
-            )
+            epoll_wait_spin_then_block(epoll_fd, &mut events, spin_before_block_us, epoll_idle_us)
         } else {
-            unsafe { libc::epoll_wait(epoll_fd, events.as_mut_ptr(), MAX_EVENTS, epoll_timeout_ms) }
+            epoll_wait_block(epoll_fd, &mut events, epoll_idle_us)
         };
         if ready < 0 {
             let err = io::Error::last_os_error();
@@ -198,15 +197,16 @@ where
             let revents = events[i].events;
 
             if token == LISTENER_TOKEN {
-                accept_control(&listener, epoll_fd, accept_budget, &mut control);
+                accept_control(listener_fd, epoll_fd, accept_budget, &mut control);
                 continue;
             }
 
             if token == CONTROL_TOKEN {
+                let mut control_closed = false;
                 if revents & (libc::EPOLLIN as u32) != 0 {
-                    if let Some(stream) = control.as_mut() {
-                        drain_fds(
-                            stream,
+                    if let Some(control_fd) = control {
+                        control_closed = drain_fds(
+                            control_fd,
                             epoll_fd,
                             recv_fd_budget,
                             &handler,
@@ -215,11 +215,11 @@ where
                         );
                     }
                 }
-                if revents & ((libc::EPOLLHUP | libc::EPOLLERR) as u32) != 0 {
-                    if let Some(fd) = control.as_ref().map(AsRawFd::as_raw_fd) {
+                if control_closed || revents & ((libc::EPOLLHUP | libc::EPOLLERR) as u32) != 0 {
+                    if let Some(fd) = control.take() {
                         epoll_del(epoll_fd, fd);
+                        unsafe { libc::close(fd) };
                     }
-                    control = None;
                 }
                 continue;
             }
@@ -241,10 +241,10 @@ where
 }
 
 fn accept_control(
-    listener: &UnixListener,
+    listener_fd: RawFd,
     epoll_fd: RawFd,
     accept_budget: i32,
-    control: &mut Option<UnixStream>,
+    control: &mut Option<RawFd>,
 ) {
     // Typically we only need a single LB->API control connection. Still, bound accepts
     // to avoid pathological bursts.
@@ -254,13 +254,21 @@ fn accept_control(
             return;
         }
 
-        match listener.accept() {
-            Ok((stream, _)) => {
-                set_nonblocking(stream.as_raw_fd()).ok();
+        let fd = unsafe {
+            libc::accept4(
+                listener_fd,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                libc::SOCK_CLOEXEC,
+            )
+        };
 
+        if fd >= 0 {
+            {
                 if control.is_none() {
-                    epoll_add(epoll_fd, stream.as_raw_fd(), CONTROL_TOKEN, libc::EPOLLIN);
-                    *control = Some(stream);
+                    set_nonblocking(fd).ok();
+                    epoll_add(epoll_fd, fd, CONTROL_TOKEN, libc::EPOLLIN);
+                    *control = Some(fd);
                     accepted += 1;
                     // Preserve previous behavior: accept at most one control stream per tick
                     // unless accept_budget is explicitly set > 0.
@@ -269,39 +277,46 @@ fn accept_control(
                     }
                 } else {
                     // Extra control connections: close immediately (do not replace active one).
-                    unsafe { libc::close(stream.as_raw_fd()) };
+                    unsafe { libc::close(fd) };
                     accepted += 1;
                 }
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => return,
-            Err(e) => {
-                eprintln!("control accept error: {e}");
-                return;
-            }
+            continue;
         }
+
+        let e = io::Error::last_os_error();
+        if e.kind() == io::ErrorKind::WouldBlock {
+            return;
+        }
+        if e.raw_os_error() == Some(libc::EINTR) {
+            continue;
+        }
+        eprintln!("control accept error: {e}");
+        return;
     }
 }
 
 fn drain_fds(
-    control: &mut UnixStream,
+    control_fd: RawFd,
     epoll_fd: RawFd,
     recv_fd_budget: i32,
     handler: &Arc<Handler>,
     conns: &mut ConnTable,
     client_fd_preconfigured: bool,
-) {
+) -> bool {
     for _ in 0..recv_fd_budget {
-        match super::recv_fd_nb(control) {
+        match super::recv_fd_nb(control_fd) {
             super::RecvFdResult::Fd(client_fd) => {
                 on_new_client_fd(epoll_fd, client_fd, handler, conns, client_fd_preconfigured)
             }
-            super::RecvFdResult::WouldBlock => break,
+            super::RecvFdResult::WouldBlock => return false,
             super::RecvFdResult::Closed => {
-                epoll_del(epoll_fd, control.as_raw_fd());
-                break;
+                epoll_del(epoll_fd, control_fd);
+                return true;
             }
         }
     }
+    false
 }
 
 fn on_new_client_fd(
@@ -594,11 +609,21 @@ fn close_conn(epoll_fd: RawFd, client_fd: RawFd, conns: &mut ConnTable) {
     shutdown_client(epoll_fd, client_fd, conns);
 }
 
-fn epoll_timeout_ms_from_env() -> i32 {
+fn epoll_idle_us_from_env() -> i64 {
+    if let Ok(value) = std::env::var("RINHA_EPOLL_IDLE_US") {
+        if let Ok(parsed) = value.parse::<i64>() {
+            if parsed >= 0 {
+                return parsed;
+            }
+        }
+    }
+
     std::env::var("RINHA_EPOLL_TIMEOUT_MS")
         .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1)
+        .and_then(|s| s.parse::<i64>().ok())
+        .filter(|value| *value >= 0)
+        .map(|value| value * 1_000)
+        .unwrap_or(60)
 }
 
 fn recv_fd_budget_from_env() -> i32 {
@@ -620,14 +645,14 @@ fn accept_budget_from_env() -> i32 {
 fn client_fd_preconfigured_from_env() -> bool {
     std::env::var("RINHA_CLIENT_FD_PRECONFIGURED")
         .map(|v| v != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 fn configure_epoll_busy_poll(epoll_fd: RawFd) {
     let busy_poll_us: u32 = std::env::var("RINHA_BUSY_POLL_US")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+        .unwrap_or(100);
     if busy_poll_us == 0 {
         return;
     }
@@ -647,11 +672,16 @@ fn configure_epoll_busy_poll(epoll_fd: RawFd) {
     };
     let rc = unsafe { libc::ioctl(epoll_fd, EPIOCSPARAMS, &params) };
     if rc < 0 {
-        eprintln!(
-            "EPIOCSPARAMS failed (busy_poll_us={}): {}",
-            busy_poll_us,
-            io::Error::last_os_error()
-        );
+        let err = io::Error::last_os_error();
+        match err.raw_os_error() {
+            Some(libc::EINVAL | libc::ENOTTY | libc::EOPNOTSUPP) => {}
+            _ => {
+                eprintln!(
+                    "EPIOCSPARAMS failed (busy_poll_us={}): {}",
+                    busy_poll_us, err
+                );
+            }
+        }
     }
 }
 
@@ -779,12 +809,73 @@ fn spin_before_block_us_from_env() -> u32 {
         .unwrap_or(0)
 }
 
+fn bind_seqpacket_listener(socket_path: &str) -> io::Result<RawFd> {
+    let _ = std::fs::remove_file(socket_path);
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let result = (|| {
+        let addr = unix_sockaddr(socket_path)?;
+        let rc = unsafe {
+            libc::bind(
+                fd,
+                &addr.storage as *const _ as *const libc::sockaddr,
+                addr.len,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let _ = std::fs::set_permissions(
+            socket_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o777),
+        );
+        if unsafe { libc::listen(fd, 4) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        set_nonblocking(fd)?;
+        Ok(())
+    })();
+
+    if let Err(err) = result {
+        unsafe { libc::close(fd) };
+        return Err(err);
+    }
+    Ok(fd)
+}
+
+struct UnixSockAddr {
+    storage: libc::sockaddr_un,
+    len: libc::socklen_t,
+}
+
+fn unix_sockaddr(path: &str) -> io::Result<UnixSockAddr> {
+    let bytes = path.as_bytes();
+    if bytes.is_empty() || bytes.len() >= 108 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unix socket path is empty or too long",
+        ));
+    }
+    let mut storage: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    storage.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (dst, src) in storage.sun_path.iter_mut().zip(bytes.iter().copied()) {
+        *dst = src as libc::c_char;
+    }
+    Ok(UnixSockAddr {
+        storage,
+        len: (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + 1) as libc::socklen_t,
+    })
+}
+
 /// Busy-poll epoll with timeout 0 before blocking, to avoid scheduler wakeup latency.
 fn epoll_wait_spin_then_block(
     epoll_fd: RawFd,
     events: &mut [libc::epoll_event],
     spin_us: u32,
-    block_timeout_ms: i32,
+    block_timeout_us: i64,
 ) -> i32 {
     let deadline = Instant::now() + Duration::from_micros(spin_us as u64);
     loop {
@@ -797,7 +888,33 @@ fn epoll_wait_spin_then_block(
         }
         std::hint::spin_loop();
     }
-    unsafe { libc::epoll_wait(epoll_fd, events.as_mut_ptr(), MAX_EVENTS, block_timeout_ms) }
+    epoll_wait_block(epoll_fd, events, block_timeout_us)
+}
+
+fn epoll_wait_block(epoll_fd: RawFd, events: &mut [libc::epoll_event], timeout_us: i64) -> i32 {
+    let timeout = libc::timespec {
+        tv_sec: timeout_us / 1_000_000,
+        tv_nsec: (timeout_us % 1_000_000) * 1_000,
+    };
+    let ready = unsafe {
+        libc::epoll_pwait2(
+            epoll_fd,
+            events.as_mut_ptr(),
+            MAX_EVENTS,
+            &timeout,
+            std::ptr::null(),
+        )
+    };
+    if ready >= 0 {
+        return ready;
+    }
+
+    let err = io::Error::last_os_error();
+    if matches!(err.raw_os_error(), Some(libc::ENOSYS) | Some(libc::EINVAL)) {
+        let timeout_ms = ((timeout_us + 999) / 1_000).max(1) as i32;
+        return unsafe { libc::epoll_wait(epoll_fd, events.as_mut_ptr(), MAX_EVENTS, timeout_ms) };
+    }
+    ready
 }
 
 fn conn_arm_epoll(conns: &mut ConnTable, epoll_fd: RawFd, fd: RawFd, events: i32) {

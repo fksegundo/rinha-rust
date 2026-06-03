@@ -5,6 +5,8 @@ __pycache__/
 privatedocs/
 local/
 .idea/
+data/
+results/
 compose.local.yml
 compose.perf.yml
 compose.mlock.yml
@@ -14,8 +16,13 @@ k6/
 docker/Dockerfile.perf
 submission/
 compose.*
+!docker/compose.*.yml
 !compose.haproxy.yml
 !compose.nginx.yml
 !compose.sonforevis.yml
 !compose.mlock.yml
 !compose.iouring.yml
+
+# Keep local resources and generator profile ignored
+resources/
+docs/GENERATOR_PROFILE.md

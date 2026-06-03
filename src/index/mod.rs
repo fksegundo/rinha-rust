@@ -170,7 +170,6 @@ impl PartitionSet {
     }
 }
 
-
 struct MmapRegion {
     ptr: *mut u8,
     len: usize,
@@ -376,12 +375,25 @@ impl SpecialistIndex {
         if is_legacy_v2 {
             eprintln!(
                 "[RNSPCST2] loaded: {} partitions, {} nodes, {} blocks, avx2={}, mode={:?}, early_exit={}, cuts_v0={:?}",
-                partition_count, node_count, total_blocks, has_avx2, search_mode, early_exit_threshold_val, legacy_cuts
+                partition_count,
+                node_count,
+                total_blocks,
+                has_avx2,
+                search_mode,
+                early_exit_threshold_val,
+                legacy_cuts
             );
         } else {
             eprintln!(
                 "[RNSPCST3] loaded: {} partitions, {} nodes, {} blocks, avx2={}, mode={:?}, early_exit={}, amount_cuts={:?}, dow_cuts={:?}",
-                partition_count, node_count, total_blocks, has_avx2, search_mode, early_exit_threshold_val, amount_cuts, dow_cuts
+                partition_count,
+                node_count,
+                total_blocks,
+                has_avx2,
+                search_mode,
+                early_exit_threshold_val,
+                amount_cuts,
+                dow_cuts
             );
         }
 
@@ -446,13 +458,9 @@ impl SpecialistIndex {
     }
 
     /// Full exact k-NN plus partition keys that contributed to the final top-5.
-    pub fn predict_fraud_count_with_partitions(
-        &self,
-        query: &QueryVector,
-    ) -> (u8, PartitionSet) {
+    pub fn predict_fraud_count_with_partitions(&self, query: &QueryVector) -> (u8, PartitionSet) {
         let mut part_keys = [u32::MAX; K];
-        let count =
-            self.predict_fraud_count_inner(query, None, None, Some(&mut part_keys));
+        let count = self.predict_fraud_count_inner(query, None, None, Some(&mut part_keys));
         let set = PartitionSet::from_top_keys(&part_keys);
         (count, set)
     }
@@ -472,8 +480,7 @@ impl SpecialistIndex {
         allowed: &PartitionSet,
     ) -> (u8, SearchStats) {
         let mut stats = SearchStats::default();
-        let count =
-            self.predict_fraud_count_inner(query, Some(&mut stats), Some(allowed), None);
+        let count = self.predict_fraud_count_inner(query, Some(&mut stats), Some(allowed), None);
         (count, stats)
     }
 
@@ -605,7 +612,8 @@ impl SpecialistIndex {
         }
 
         // Dynamic partition sorting and sweep for both KeyFirst (remaining partitions) and Specialist (all partitions)
-        let mut partition_entries: MaybeUninit<[(i64, usize); MAX_PARTITIONS]> = MaybeUninit::uninit();
+        let mut partition_entries: MaybeUninit<[(i64, usize); MAX_PARTITIONS]> =
+            MaybeUninit::uninit();
         let partition_entries_ptr = partition_entries.as_mut_ptr();
         let mut partition_len = 0usize;
 

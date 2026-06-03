@@ -102,7 +102,11 @@ pub fn build_index(
     let cuts = scheme.compute_cuts(&references);
     eprintln!(
         "[build] scheme={} amount_cuts={} dow_cuts={} total_cuts={} (persisted in header), kd_split={:?}",
-        scheme.name, scheme.amount_cut_count, scheme.dow_cut_count, cuts.len(), split_strategy
+        scheme.name,
+        scheme.amount_cut_count,
+        scheme.dow_cut_count,
+        cuts.len(),
+        split_strategy
     );
 
     let mut writer = IndexWriter::new();

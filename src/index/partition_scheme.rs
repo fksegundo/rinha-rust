@@ -1,5 +1,5 @@
-use crate::index::build::Reference;
 use crate::QueryVector;
+use crate::index::build::Reference;
 
 #[derive(Clone, Debug)]
 pub struct PartitionScheme {
@@ -33,17 +33,17 @@ impl PartitionScheme {
 
     pub fn compute_cuts(&self, references: &[Reference]) -> Vec<i16> {
         let mut cuts = Vec::with_capacity(self.amount_cut_count + self.dow_cut_count);
-        
+
         // Compute cuts for amount (dim 0)
         let amount_cuts = compute_quantile_cuts(references, 0, self.amount_cut_count);
         cuts.extend(amount_cuts);
-        
+
         // Compute cuts for day_of_week (dim 4)
         if self.dow_cut_count > 0 {
             let dow_cuts = compute_quantile_cuts(references, 4, self.dow_cut_count);
             cuts.extend(dow_cuts);
         }
-        
+
         cuts
     }
 

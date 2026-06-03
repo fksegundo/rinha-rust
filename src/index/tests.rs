@@ -28,7 +28,8 @@ mod tests {
                 label: 1,
             },
         ];
-        let index_bytes = build_index(references, 64, 0, PartitionScheme::recommended()).expect("failed to build index");
+        let index_bytes = build_index(references, 64, 0, PartitionScheme::recommended())
+            .expect("failed to build index");
         std::fs::write(index_path, index_bytes).expect("failed to write test index");
 
         let index = SpecialistIndex::open(index_path).expect("failed to open index");

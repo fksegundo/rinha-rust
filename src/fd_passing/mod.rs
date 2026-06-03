@@ -1,9 +1,9 @@
 mod evented;
 
-pub use evented::run_fd_evented_server;
+pub use evented::{run_fd_evented_server, run_fd_evented_server_with_hook};
 
 use std::net::TcpStream;
-use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::os::unix::net::UnixListener;
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ pub(crate) enum RecvFdResult {
     Closed,
 }
 
-pub(crate) fn recv_fd_nb(stream: &mut std::os::unix::net::UnixStream) -> RecvFdResult {
+pub(crate) fn recv_fd_nb(fd: RawFd) -> RecvFdResult {
     let mut buf = [0u8; 1];
     let mut iov = libc::iovec {
         iov_base: buf.as_mut_ptr().cast(),
@@ -30,7 +30,8 @@ pub(crate) fn recv_fd_nb(stream: &mut std::os::unix::net::UnixStream) -> RecvFdR
         msg_flags: 0,
     };
 
-    let received = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, 0) };
+    let received =
+        unsafe { libc::recvmsg(fd, &mut msg, libc::MSG_DONTWAIT | libc::MSG_CMSG_CLOEXEC) };
     if received < 0 {
         let err = std::io::Error::last_os_error();
         if err.raw_os_error() == Some(libc::EAGAIN) {

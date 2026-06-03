@@ -7,8 +7,8 @@
 //!   measure_search <index.idx> <test.json> [repeats]
 //!   measure_search compare --refs <refs.json.gz> --queries <test.json> [--leaf-size 56] [--limit 10000]
 
-use rinha_rust::index::partition_scheme::PartitionScheme;
 use rinha_rust::index::SpecialistIndex;
+use rinha_rust::index::partition_scheme::PartitionScheme;
 use rinha_rust::vector;
 use std::time::Instant;
 
@@ -30,8 +30,8 @@ fn run_single(args: &[String]) {
     let json_path = &args[2];
     let repeats: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(3);
 
-    let index = SpecialistIndex::open(index_path)
-        .unwrap_or_else(|e| panic!("failed to open index: {}", e));
+    let index =
+        SpecialistIndex::open(index_path).unwrap_or_else(|e| panic!("failed to open index: {}", e));
 
     let json_str = std::fs::read_to_string(json_path).expect("read test json");
     let root: serde_json::Value = serde_json::from_str(&json_str).expect("parse json");
@@ -119,12 +119,20 @@ fn run_compare(args: &[String]) {
     let refs_path = refs_path.expect("Missing required --refs <path>");
     let queries_path = queries_path.expect("Missing required --queries <path>");
 
-    eprintln!("[{}] Loading references from {}...", format_time(), refs_path);
+    eprintln!(
+        "[{}] Loading references from {}...",
+        format_time(),
+        refs_path
+    );
     let references = rinha_rust::index::build::load_references(&refs_path)
         .unwrap_or_else(|e| panic!("failed to load references: {}", e));
     eprintln!("[{}] Loaded {} references", format_time(), references.len());
 
-    eprintln!("[{}] Parsing queries from {}...", format_time(), queries_path);
+    eprintln!(
+        "[{}] Parsing queries from {}...",
+        format_time(),
+        queries_path
+    );
     let json_str = std::fs::read_to_string(&queries_path).expect("read test json");
     let root: serde_json::Value = serde_json::from_str(&json_str).expect("parse json");
     let entries = root
@@ -144,10 +152,21 @@ fn run_compare(args: &[String]) {
             queries.push(q);
         }
     }
-    eprintln!("[{}] Parsed {} queries (limit={})", format_time(), queries.len(), limit);
+    eprintln!(
+        "[{}] Parsed {} queries (limit={})",
+        format_time(),
+        queries.len(),
+        limit
+    );
 
-    println!("\n=== Scheme Comparison Matrix (leaf_size={}) ===", leaf_size);
-    println!("{:<14} | {:<12} | {:<12} | {:<12} | {:<18} | {:<10}", "Scheme", "p50 (µs)", "p99 (µs)", "LeafBlocks", "SecondaryParts", "WorkScore");
+    println!(
+        "\n=== Scheme Comparison Matrix (leaf_size={}) ===",
+        leaf_size
+    );
+    println!(
+        "{:<14} | {:<12} | {:<12} | {:<12} | {:<18} | {:<10}",
+        "Scheme", "p50 (µs)", "p99 (µs)", "LeafBlocks", "SecondaryParts", "WorkScore"
+    );
     println!("{}", "-".repeat(89));
 
     let temp_idx_path = "data/measure-search-temp.idx";
@@ -157,19 +176,24 @@ fn run_compare(args: &[String]) {
 
     for &scheme_name in &schemes {
         let scheme = PartitionScheme::by_name(scheme_name).unwrap();
-        eprintln!("[{}] Building in-memory index for {}...", format_time(), scheme_name);
-        
+        eprintln!(
+            "[{}] Building in-memory index for {}...",
+            format_time(),
+            scheme_name
+        );
+
         let index_bytes = rinha_rust::index::build::build_index(
             references.clone(),
             leaf_size,
             128,
             scheme.clone(),
-        ).unwrap();
-        
+        )
+        .unwrap();
+
         std::fs::write(temp_idx_path, &index_bytes).expect("write temp index");
 
         let index = SpecialistIndex::open(temp_idx_path).unwrap();
-        
+
         // Measure stats & timings
         let mut total_blocks = 0u64;
         let mut total_secondaries = 0u64;
@@ -187,13 +211,15 @@ fn run_compare(args: &[String]) {
         let q_count = queries.len() as f64;
         let p50 = timings[(0.50 * timings.len() as f64) as usize] as f64 / 1000.0;
         let p99 = timings[(0.99 * timings.len() as f64) as usize] as f64 / 1000.0;
-        
+
         let avg_blocks = total_blocks as f64 / q_count;
         let avg_secondaries = total_secondaries as f64 / q_count;
         let work_score = avg_blocks + 100.0 * avg_secondaries;
 
-        println!("{:<14} | {:<12.1} | {:<12.1} | {:<12.1} | {:<18.2} | {:<10.1}", 
-                 scheme_name, p50, p99, avg_blocks, avg_secondaries, work_score);
+        println!(
+            "{:<14} | {:<12.1} | {:<12.1} | {:<12.1} | {:<18.2} | {:<10.1}",
+            scheme_name, p50, p99, avg_blocks, avg_secondaries, work_score
+        );
 
         ranked.push((work_score, scheme_name.to_string(), p50, p99));
     }
@@ -203,7 +229,14 @@ fn run_compare(args: &[String]) {
     ranked.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
     println!("\n=== Ranks (by WorkScore: lower is better) ===");
     for (i, (score, name, p50, p99)) in ranked.iter().enumerate() {
-        println!("  {}. {} (WorkScore={:.1}, p50={:.1}µs, p99={:.1}µs)", i + 1, name, score, p50, p99);
+        println!(
+            "  {}. {} (WorkScore={:.1}, p50={:.1}µs, p99={:.1}µs)",
+            i + 1,
+            name,
+            score,
+            p50,
+            p99
+        );
     }
 }
 

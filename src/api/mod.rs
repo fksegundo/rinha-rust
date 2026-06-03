@@ -17,10 +17,10 @@ pub fn run(index_path: &str, bind_addr: &str, fd_socket: Option<&str>) {
             .unwrap_or_else(|e| panic!("failed to open index '{}': {}", index_path, e)),
     );
 
-    if std::env::var("RINHA_MLOCK_INDEX").as_deref() == Ok("1") {
+    if std::env::var("RINHA_MLOCK_INDEX").as_deref() != Ok("0") {
         index.mlock_all();
     }
-    if std::env::var("RINHA_PRETOUCH_INDEX").as_deref() == Ok("1") {
+    if std::env::var("RINHA_PRETOUCH_INDEX").as_deref() != Ok("0") {
         index.pretouch_all();
     }
 

@@ -85,10 +85,7 @@ fn main() {
     let mut best: Option<(usize, f64)> = None;
     for &d in CANDIDATE_DIMS {
         let cuts = equifreq_cuts(&vectors, d);
-        let keys: Vec<u32> = vectors
-            .iter()
-            .map(|v| partition_key(v, d, &cuts))
-            .collect();
+        let keys: Vec<u32> = vectors.iter().map(|v| partition_key(v, d, &cuts)).collect();
 
         // Fan-out + balance.
         let mut counts = std::collections::HashMap::<u32, u32>::new();
@@ -144,9 +141,7 @@ fn main() {
     }
 
     if let Some((d, _)) = best {
-        println!(
-            "\nBest bucket_dim by (coloc - 0.1*span): {d}  -> RINHA_PARTITION_BUCKET_DIM={d}"
-        );
+        println!("\nBest bucket_dim by (coloc - 0.1*span): {d}  -> RINHA_PARTITION_BUCKET_DIM={d}");
     }
 }
 
@@ -209,10 +204,7 @@ fn exact_topk(vectors: &[QueryVector], query_idx: &[usize]) -> Vec<[usize; K]> {
     let mut out = vec![[0usize; K]; query_idx.len()];
 
     std::thread::scope(|scope| {
-        for (out_chunk, q_chunk) in out
-            .chunks_mut(chunk)
-            .zip(query_idx.chunks(chunk))
-        {
+        for (out_chunk, q_chunk) in out.chunks_mut(chunk).zip(query_idx.chunks(chunk)) {
             scope.spawn(move || {
                 for (slot, &qi) in out_chunk.iter_mut().zip(q_chunk.iter()) {
                     *slot = topk_one(vectors, qi);
