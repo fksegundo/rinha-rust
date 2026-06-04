@@ -93,7 +93,6 @@ enum KdSplitStrategy {
 pub fn build_index(
     references: Vec<Reference>,
     leaf_size: usize,
-    _flat_threshold: usize,
     scheme: PartitionScheme,
 ) -> Result<Vec<u8>, String> {
     let leaf_size = leaf_size.clamp(LANES, 2048);
@@ -284,22 +283,6 @@ fn build_node(
     };
 
     node_idx
-}
-
-fn compute_equifreq_cuts(references: &[Reference], dim: usize) -> [i16; 7] {
-    if references.len() < 8 {
-        return crate::index::partition_cuts_v0();
-    }
-    let mut values: Vec<i16> = references.iter().map(|r| r.vector[dim]).collect();
-    values.sort_unstable();
-    let n = values.len();
-    let mut cuts = [0i16; 7];
-    for (i, slot) in cuts.iter_mut().enumerate() {
-        let idx = ((i + 1) * n) / 8;
-        let idx = idx.min(n - 1);
-        *slot = values[idx];
-    }
-    cuts
 }
 
 fn widest_dimension(min: &QueryVector, max: &QueryVector) -> usize {

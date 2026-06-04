@@ -118,7 +118,7 @@ enum ConnState {
     },
     Writing {
         buf: Box<[u8; BUF_SIZE]>,
-        response: &'static [u8],
+        responses: Vec<&'static [u8]>,
         written: usize,
         leftover_off: usize,
         leftover_len: usize,
@@ -395,7 +395,7 @@ fn drive_reading(
                 handler,
                 conns,
                 buf,
-                http::RESPONSE_BAD_REQUEST,
+                vec![http::RESPONSE_BAD_REQUEST],
                 0,
                 0,
                 false,
@@ -404,45 +404,49 @@ fn drive_reading(
         }
 
         let mut processed = 0usize;
+        let mut responses = Vec::new();
+        let mut keep_alive = true;
+
         while processed < used {
             match http::process_one_request(&buf[processed..used], |req| handler(req)) {
                 BufferStep::Respond {
                     consumed,
                     response,
-                    keep_alive,
+                    keep_alive: req_keep_alive,
                 } => {
                     processed += consumed;
-                    let leftover_off = processed;
-                    let leftover_len = used - processed;
-                    start_write(
-                        epoll_fd,
-                        client_fd,
-                        handler,
-                        conns,
-                        buf,
-                        response,
-                        leftover_off,
-                        leftover_len,
-                        keep_alive,
-                    );
-                    return;
+                    responses.push(response);
+                    if !req_keep_alive {
+                        keep_alive = false;
+                    }
                 }
                 BufferStep::RejectAndClose { response } => {
-                    start_write(
-                        epoll_fd, client_fd, handler, conns, buf, response, 0, 0, false,
-                    );
-                    return;
+                    processed = used;
+                    responses.push(response);
+                    keep_alive = false;
+                    break;
                 }
                 BufferStep::NeedMore => {
-                    if processed > 0 {
-                        buf.copy_within(processed..used, 0);
-                        used -= processed;
-                    }
-                    conn_arm_epoll(conns, epoll_fd, client_fd, libc::EPOLLIN);
-                    conns.insert(client_fd, ConnState::Reading { buf, used });
-                    return;
+                    break;
                 }
             }
+        }
+
+        if !responses.is_empty() {
+            let leftover_off = processed;
+            let leftover_len = used - processed;
+            start_write(
+                epoll_fd,
+                client_fd,
+                handler,
+                conns,
+                buf,
+                responses,
+                leftover_off,
+                leftover_len,
+                keep_alive,
+            );
+            return;
         }
 
         if processed > 0 {
@@ -461,14 +465,14 @@ fn start_write(
     handler: &Arc<Handler>,
     conns: &mut ConnTable,
     buf: Box<[u8; BUF_SIZE]>,
-    response: &'static [u8],
+    responses: Vec<&'static [u8]>,
     leftover_off: usize,
     leftover_len: usize,
     keep_alive: bool,
 ) {
     let state = ConnState::Writing {
         buf,
-        response,
+        responses,
         written: 0,
         leftover_off,
         leftover_len,
@@ -527,6 +531,28 @@ enum WriteOutcome {
     Closed,
 }
 
+fn build_iovecs(responses: &[&'static [u8]], mut written: usize, iovs: &mut [libc::iovec]) -> i32 {
+    let mut iov_cnt = 0;
+    for &resp in responses {
+        let len = resp.len();
+        if written >= len {
+            written -= len;
+        } else {
+            let offset = written;
+            written = 0;
+            iovs[iov_cnt] = libc::iovec {
+                iov_base: unsafe { resp.as_ptr().add(offset) as *mut libc::c_void },
+                iov_len: len - offset,
+            };
+            iov_cnt += 1;
+            if iov_cnt == iovs.len() {
+                break;
+            }
+        }
+    }
+    iov_cnt as i32
+}
+
 fn finish_write(
     epoll_fd: RawFd,
     client_fd: RawFd,
@@ -535,7 +561,7 @@ fn finish_write(
 ) -> WriteOutcome {
     let ConnState::Writing {
         mut buf,
-        response,
+        responses,
         mut written,
         leftover_off,
         leftover_len,
@@ -545,17 +571,34 @@ fn finish_write(
         return WriteOutcome::Closed;
     };
 
+    let total_len: usize = responses.iter().map(|r| r.len()).sum();
+
     loop {
-        let res = unsafe {
-            libc::write(
-                client_fd,
-                response.as_ptr().add(written) as *const libc::c_void,
-                response.len() - written,
-            )
-        };
+        let mut iovs = [libc::iovec {
+            iov_base: std::ptr::null_mut(),
+            iov_len: 0,
+        }; 32];
+        let iov_cnt = build_iovecs(&responses, written, &mut iovs);
+        if iov_cnt == 0 {
+            if leftover_len > 0 {
+                buf.copy_within(leftover_off..leftover_off + leftover_len, 0);
+                return WriteOutcome::DoneReading {
+                    buf,
+                    used: leftover_len,
+                };
+            }
+            if keep_alive {
+                return WriteOutcome::DoneReading { buf, used: 0 };
+            }
+            conns.recycle_buf(buf);
+            shutdown_client(epoll_fd, client_fd, conns);
+            return WriteOutcome::Closed;
+        }
+
+        let res = unsafe { libc::writev(client_fd, iovs.as_ptr(), iov_cnt) };
         if res > 0 {
             written += res as usize;
-            if written == response.len() {
+            if written == total_len {
                 if leftover_len > 0 {
                     buf.copy_within(leftover_off..leftover_off + leftover_len, 0);
                     return WriteOutcome::DoneReading {
@@ -579,7 +622,7 @@ fn finish_write(
             conn_arm_epoll(conns, epoll_fd, client_fd, libc::EPOLLOUT);
             return WriteOutcome::Wait(ConnState::Writing {
                 buf,
-                response,
+                responses,
                 written,
                 leftover_off,
                 leftover_len,

@@ -20,10 +20,6 @@ fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(256);
-    let flat_threshold: usize = env::var("RINHA_FLAT_THRESHOLD")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(128);
 
     let scheme_name =
         env::var("RINHA_PARTITION_SCHEME").unwrap_or_else(|_| "amt16_dow7".to_string());
@@ -36,12 +32,11 @@ fn main() {
     });
 
     eprintln!(
-        "Building index with leaf_size={}, flat_threshold={}, scheme={}...",
-        leaf_size, flat_threshold, scheme.name
+        "Building index with leaf_size={}, scheme={}...",
+        leaf_size, scheme.name
     );
-    let index_bytes =
-        rinha_rust::index::build::build_index(references, leaf_size, flat_threshold, scheme)
-            .unwrap_or_else(|e| panic!("failed to build index: {}", e));
+    let index_bytes = rinha_rust::index::build::build_index(references, leaf_size, scheme)
+        .unwrap_or_else(|e| panic!("failed to build index: {}", e));
 
     let len = index_bytes.len();
     std::fs::write(output_path, index_bytes)

@@ -44,54 +44,6 @@ fn quantize(value: f64) -> i16 {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct ValueLoc {
-    /// Offset to the first byte of the JSON token for this value.
-    ///
-    /// For string values: points to the opening `"` (so `read_string_at` can be used).
-    /// For numbers: points to the first digit/sign.
-    /// For booleans: points to the first byte of `true`/`false`.
-    /// For arrays: points to the opening `[`.
-    start: usize,
-}
-
-#[derive(Default)]
-struct FieldSlots {
-    // transaction
-    amount: Option<ValueLoc>,
-    installments: Option<ValueLoc>,
-    requested_at: Option<ValueLoc>,
-
-    // customer
-    customer_avg_amount: Option<ValueLoc>,
-    tx_count_24h: Option<ValueLoc>,
-    known_merchants: Option<ValueLoc>,
-
-    // merchant
-    merchant_id: Option<ValueLoc>,
-    mcc: Option<ValueLoc>,
-    merchant_avg_amount: Option<ValueLoc>,
-
-    // terminal
-    is_online: Option<ValueLoc>,
-    card_present: Option<ValueLoc>,
-    km_from_home: Option<ValueLoc>,
-
-    // last_transaction
-    last_timestamp: Option<ValueLoc>,
-    last_km_from_current: Option<ValueLoc>,
-    last_transaction_seen: bool,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ObjectKind {
-    Transaction,
-    Customer,
-    Merchant,
-    Terminal,
-    LastTransaction,
-}
-
 #[inline(always)]
 fn skip_ws(json: &[u8], mut i: usize) -> usize {
     while i < json.len() && is_json_whitespace(json[i]) {
@@ -244,132 +196,37 @@ fn skip_value(json: &[u8], i: usize) -> Result<usize, ParseError> {
     }
 }
 
-fn eq_key_bytes(key: &[u8], expected: &[u8]) -> bool {
-    key.len() == expected.len() && key.iter().zip(expected.iter()).all(|(&a, &b)| a == b)
-}
+fn try_parse_single_pass(json: &[u8], out: &mut QueryVector) -> Result<(), ParseError> {
+    out.fill(0);
 
-fn scan_object_fields(
-    json: &[u8],
-    mut i: usize,
-    kind: ObjectKind,
-    slots: &mut FieldSlots,
-) -> Result<usize, ParseError> {
-    i = skip_ws(json, i);
-    if json.get(i).copied() != Some(b'{') {
-        return Err(ParseError::InvalidFormat);
-    }
-    i += 1; // consume '{'
+    let mut amount = 0.0f64;
+    let mut customer_avg_amount = 0.0f64;
+    let mut merchant_hash = 0u64;
+    let mut known_hashes = [0u64; 64];
+    let mut known_count = 0usize;
+    let mut requested_minute = 0i64;
 
-    loop {
-        i = skip_ws(json, i);
-        if json.get(i).copied() == Some(b'}') {
-            return Ok(i + 1);
-        }
-
-        // key
-        if json.get(i).copied() != Some(b'"') {
-            return Err(ParseError::InvalidFormat);
-        }
-        let key_start = i + 1;
-        let end = skip_string(json, i)?;
-        let key_end = end - 1; // exclusive end for key content
-        let key = &json[key_start..key_end];
-
-        i = skip_ws(json, end);
-        if json.get(i).copied() != Some(b':') {
-            return Err(ParseError::InvalidFormat);
-        }
-        i += 1; // consume ':'
-
-        let value_start = skip_ws(json, i);
-
-        // value
-        match kind {
-            ObjectKind::Transaction => {
-                if eq_key_bytes(key, b"amount") {
-                    slots.amount = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else if eq_key_bytes(key, b"installments") {
-                    slots.installments = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else if eq_key_bytes(key, b"requested_at") {
-                    slots.requested_at = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else {
-                    i = skip_value(json, value_start)?;
-                }
-            }
-            ObjectKind::Customer => {
-                if eq_key_bytes(key, b"avg_amount") {
-                    slots.customer_avg_amount = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else if eq_key_bytes(key, b"tx_count_24h") {
-                    slots.tx_count_24h = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else if eq_key_bytes(key, b"known_merchants") {
-                    slots.known_merchants = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else {
-                    i = skip_value(json, value_start)?;
-                }
-            }
-            ObjectKind::Merchant => {
-                if eq_key_bytes(key, b"id") {
-                    slots.merchant_id = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else if eq_key_bytes(key, b"mcc") {
-                    slots.mcc = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else if eq_key_bytes(key, b"avg_amount") {
-                    slots.merchant_avg_amount = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else {
-                    i = skip_value(json, value_start)?;
-                }
-            }
-            ObjectKind::Terminal => {
-                if eq_key_bytes(key, b"is_online") {
-                    slots.is_online = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else if eq_key_bytes(key, b"card_present") {
-                    slots.card_present = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else if eq_key_bytes(key, b"km_from_home") {
-                    slots.km_from_home = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else {
-                    i = skip_value(json, value_start)?;
-                }
-            }
-            ObjectKind::LastTransaction => {
-                if eq_key_bytes(key, b"timestamp") {
-                    slots.last_timestamp = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else if eq_key_bytes(key, b"km_from_current") {
-                    slots.last_km_from_current = Some(ValueLoc { start: value_start });
-                    i = skip_value(json, value_start)?;
-                } else {
-                    i = skip_value(json, value_start)?;
-                }
-            }
-        }
-
-        i = skip_ws(json, i);
-        // Optional comma between fields.
-        if json.get(i).copied() == Some(b',') {
-            i += 1;
-        }
-    }
-}
-
-fn scan_fields(json: &[u8]) -> Result<FieldSlots, ParseError> {
-    let mut slots = FieldSlots::default();
+    let mut has_amount = false;
+    let mut has_installments = false;
+    let mut has_requested_at = false;
+    let mut has_customer_avg_amount = false;
+    let mut has_tx_count_24h = false;
+    let mut has_known_merchants = false;
+    let mut has_merchant_id = false;
+    let mut has_mcc = false;
+    let mut has_merchant_avg_amount = false;
+    let mut has_is_online = false;
+    let mut has_card_present = false;
+    let mut has_km_from_home = false;
+    let mut has_last_transaction = false;
+    let mut last_timestamp = None::<i64>;
+    let mut last_km_from_current = None::<f64>;
 
     let mut i = skip_ws(json, 0);
     if json.get(i).copied() != Some(b'{') {
         return Err(ParseError::InvalidFormat);
     }
-    i += 1; // consume '{'
+    i += 1;
 
     loop {
         i = skip_ws(json, i);
@@ -380,7 +237,6 @@ fn scan_fields(json: &[u8]) -> Result<FieldSlots, ParseError> {
             break;
         }
 
-        // key
         if json.get(i).copied() != Some(b'"') {
             return Err(ParseError::InvalidFormat);
         }
@@ -393,20 +249,213 @@ fn scan_fields(json: &[u8]) -> Result<FieldSlots, ParseError> {
         if json.get(i).copied() != Some(b':') {
             return Err(ParseError::InvalidFormat);
         }
-        i += 1; // ':'
+        i += 1;
 
         let value_start = skip_ws(json, i);
 
-        if eq_key_bytes(key, b"transaction") {
-            i = scan_object_fields(json, value_start, ObjectKind::Transaction, &mut slots)?;
-        } else if eq_key_bytes(key, b"customer") {
-            i = scan_object_fields(json, value_start, ObjectKind::Customer, &mut slots)?;
-        } else if eq_key_bytes(key, b"merchant") {
-            i = scan_object_fields(json, value_start, ObjectKind::Merchant, &mut slots)?;
-        } else if eq_key_bytes(key, b"terminal") {
-            i = scan_object_fields(json, value_start, ObjectKind::Terminal, &mut slots)?;
-        } else if eq_key_bytes(key, b"last_transaction") {
-            slots.last_transaction_seen = true;
+        if key == b"transaction" {
+            i = skip_ws(json, value_start);
+            if json.get(i).copied() != Some(b'{') {
+                return Err(ParseError::InvalidFormat);
+            }
+            i += 1;
+            loop {
+                i = skip_ws(json, i);
+                if json.get(i).copied() == Some(b'}') {
+                    i += 1;
+                    break;
+                }
+                if json.get(i).copied() != Some(b'"') {
+                    return Err(ParseError::InvalidFormat);
+                }
+                let k_start = i + 1;
+                let k_end = skip_string(json, i)?;
+                let k = &json[k_start..(k_end - 1)];
+
+                i = skip_ws(json, k_end);
+                if json.get(i).copied() != Some(b':') {
+                    return Err(ParseError::InvalidFormat);
+                }
+                i += 1;
+                let v_start = skip_ws(json, i);
+
+                if k == b"amount" {
+                    amount = read_double_at(json, v_start)?;
+                    out[0] = quantize(amount * INV_10_000);
+                    has_amount = true;
+                    i = skip_value(json, v_start)?;
+                } else if k == b"installments" {
+                    let v = read_int_at(json, v_start)?;
+                    out[1] = quantize(v as f64 * INV_12);
+                    has_installments = true;
+                    i = skip_value(json, v_start)?;
+                } else if k == b"requested_at" {
+                    let s = read_string_at(json, v_start)?;
+                    let parsed = parse_datetime(s)?;
+                    requested_minute = parsed.epoch_minute;
+                    out[3] = quantize(parsed.hour as f64 * INV_23);
+                    out[4] = quantize(parsed.day_of_week as f64 * INV_6);
+                    has_requested_at = true;
+                    i = skip_value(json, v_start)?;
+                } else {
+                    i = skip_value(json, v_start)?;
+                }
+
+                i = skip_ws(json, i);
+                if json.get(i).copied() == Some(b',') {
+                    i += 1;
+                }
+            }
+        } else if key == b"customer" {
+            i = skip_ws(json, value_start);
+            if json.get(i).copied() != Some(b'{') {
+                return Err(ParseError::InvalidFormat);
+            }
+            i += 1;
+            loop {
+                i = skip_ws(json, i);
+                if json.get(i).copied() == Some(b'}') {
+                    i += 1;
+                    break;
+                }
+                if json.get(i).copied() != Some(b'"') {
+                    return Err(ParseError::InvalidFormat);
+                }
+                let k_start = i + 1;
+                let k_end = skip_string(json, i)?;
+                let k = &json[k_start..(k_end - 1)];
+
+                i = skip_ws(json, k_end);
+                if json.get(i).copied() != Some(b':') {
+                    return Err(ParseError::InvalidFormat);
+                }
+                i += 1;
+                let v_start = skip_ws(json, i);
+
+                if k == b"avg_amount" {
+                    customer_avg_amount = read_double_at(json, v_start)?;
+                    has_customer_avg_amount = true;
+                    i = skip_value(json, v_start)?;
+                } else if k == b"tx_count_24h" {
+                    let v = read_int_at(json, v_start)?;
+                    out[8] = quantize(v as f64 * INV_20);
+                    has_tx_count_24h = true;
+                    i = skip_value(json, v_start)?;
+                } else if k == b"known_merchants" {
+                    known_count = read_known_merchants_at(json, v_start, &mut known_hashes)?;
+                    has_known_merchants = true;
+                    i = skip_value(json, v_start)?;
+                } else {
+                    i = skip_value(json, v_start)?;
+                }
+
+                i = skip_ws(json, i);
+                if json.get(i).copied() == Some(b',') {
+                    i += 1;
+                }
+            }
+        } else if key == b"merchant" {
+            i = skip_ws(json, value_start);
+            if json.get(i).copied() != Some(b'{') {
+                return Err(ParseError::InvalidFormat);
+            }
+            i += 1;
+            loop {
+                i = skip_ws(json, i);
+                if json.get(i).copied() == Some(b'}') {
+                    i += 1;
+                    break;
+                }
+                if json.get(i).copied() != Some(b'"') {
+                    return Err(ParseError::InvalidFormat);
+                }
+                let k_start = i + 1;
+                let k_end = skip_string(json, i)?;
+                let k = &json[k_start..(k_end - 1)];
+
+                i = skip_ws(json, k_end);
+                if json.get(i).copied() != Some(b':') {
+                    return Err(ParseError::InvalidFormat);
+                }
+                i += 1;
+                let v_start = skip_ws(json, i);
+
+                if k == b"id" {
+                    let s = read_string_at(json, v_start)?;
+                    merchant_hash = hash_bytes(s);
+                    has_merchant_id = true;
+                    i = skip_value(json, v_start)?;
+                } else if k == b"mcc" {
+                    let s = read_string_at(json, v_start)?;
+                    out[12] = quantize(mcc_risk(parse_mcc(s)));
+                    has_mcc = true;
+                    i = skip_value(json, v_start)?;
+                } else if k == b"avg_amount" {
+                    let v = read_double_at(json, v_start)?;
+                    out[13] = quantize(v * INV_10_000);
+                    has_merchant_avg_amount = true;
+                    i = skip_value(json, v_start)?;
+                } else {
+                    i = skip_value(json, v_start)?;
+                }
+
+                i = skip_ws(json, i);
+                if json.get(i).copied() == Some(b',') {
+                    i += 1;
+                }
+            }
+        } else if key == b"terminal" {
+            i = skip_ws(json, value_start);
+            if json.get(i).copied() != Some(b'{') {
+                return Err(ParseError::InvalidFormat);
+            }
+            i += 1;
+            loop {
+                i = skip_ws(json, i);
+                if json.get(i).copied() == Some(b'}') {
+                    i += 1;
+                    break;
+                }
+                if json.get(i).copied() != Some(b'"') {
+                    return Err(ParseError::InvalidFormat);
+                }
+                let k_start = i + 1;
+                let k_end = skip_string(json, i)?;
+                let k = &json[k_start..(k_end - 1)];
+
+                i = skip_ws(json, k_end);
+                if json.get(i).copied() != Some(b':') {
+                    return Err(ParseError::InvalidFormat);
+                }
+                i += 1;
+                let v_start = skip_ws(json, i);
+
+                if k == b"is_online" {
+                    let v = read_bool_at(json, v_start)?;
+                    out[9] = if v { SCALE } else { 0 };
+                    has_is_online = true;
+                    i = skip_value(json, v_start)?;
+                } else if k == b"card_present" {
+                    let v = read_bool_at(json, v_start)?;
+                    out[10] = if v { SCALE } else { 0 };
+                    has_card_present = true;
+                    i = skip_value(json, v_start)?;
+                } else if k == b"km_from_home" {
+                    let v = read_double_at(json, v_start)?;
+                    out[7] = quantize(v * INV_1_000);
+                    has_km_from_home = true;
+                    i = skip_value(json, v_start)?;
+                } else {
+                    i = skip_value(json, v_start)?;
+                }
+
+                i = skip_ws(json, i);
+                if json.get(i).copied() == Some(b',') {
+                    i += 1;
+                }
+            }
+        } else if key == b"last_transaction" {
+            has_last_transaction = true;
             let c = json
                 .get(value_start)
                 .copied()
@@ -414,7 +463,46 @@ fn scan_fields(json: &[u8]) -> Result<FieldSlots, ParseError> {
             if c == b'n' {
                 i = skip_value(json, value_start)?;
             } else if c == b'{' {
-                i = scan_object_fields(json, value_start, ObjectKind::LastTransaction, &mut slots)?;
+                i = skip_ws(json, value_start);
+                i += 1;
+                loop {
+                    i = skip_ws(json, i);
+                    if json.get(i).copied() == Some(b'}') {
+                        i += 1;
+                        break;
+                    }
+                    if json.get(i).copied() != Some(b'"') {
+                        return Err(ParseError::InvalidFormat);
+                    }
+                    let k_start = i + 1;
+                    let k_end = skip_string(json, i)?;
+                    let k = &json[k_start..(k_end - 1)];
+
+                    i = skip_ws(json, k_end);
+                    if json.get(i).copied() != Some(b':') {
+                        return Err(ParseError::InvalidFormat);
+                    }
+                    i += 1;
+                    let v_start = skip_ws(json, i);
+
+                    if k == b"timestamp" {
+                        let s = read_string_at(json, v_start)?;
+                        let parsed = parse_datetime(s)?;
+                        last_timestamp = Some(parsed.epoch_minute);
+                        i = skip_value(json, v_start)?;
+                    } else if k == b"km_from_current" {
+                        let v = read_double_at(json, v_start)?;
+                        last_km_from_current = Some(v);
+                        i = skip_value(json, v_start)?;
+                    } else {
+                        i = skip_value(json, v_start)?;
+                    }
+
+                    i = skip_ws(json, i);
+                    if json.get(i).copied() == Some(b',') {
+                        i += 1;
+                    }
+                }
             } else {
                 return Err(ParseError::InvalidFormat);
             }
@@ -428,62 +516,71 @@ fn scan_fields(json: &[u8]) -> Result<FieldSlots, ParseError> {
         }
     }
 
-    if slots.amount.is_none() {
+    if !has_amount {
         return Err(ParseError::MissingField);
     }
-    if slots.installments.is_none() {
+    if !has_installments {
         return Err(ParseError::MissingField);
     }
-    if slots.requested_at.is_none() {
+    if !has_requested_at {
         return Err(ParseError::MissingField);
     }
-
-    if slots.customer_avg_amount.is_none() {
+    if !has_customer_avg_amount {
         return Err(ParseError::MissingField);
     }
-    if slots.tx_count_24h.is_none() {
+    if !has_tx_count_24h {
         return Err(ParseError::MissingField);
     }
-    if slots.known_merchants.is_none() {
+    if !has_known_merchants {
         return Err(ParseError::MissingField);
     }
-
-    if slots.merchant_id.is_none() {
+    if !has_merchant_id {
         return Err(ParseError::MissingField);
     }
-    if slots.mcc.is_none() {
+    if !has_mcc {
         return Err(ParseError::MissingField);
     }
-    if slots.merchant_avg_amount.is_none() {
+    if !has_merchant_avg_amount {
         return Err(ParseError::MissingField);
     }
-
-    if slots.is_online.is_none() {
+    if !has_is_online {
         return Err(ParseError::MissingField);
     }
-    if slots.card_present.is_none() {
+    if !has_card_present {
         return Err(ParseError::MissingField);
     }
-    if slots.km_from_home.is_none() {
+    if !has_km_from_home {
         return Err(ParseError::MissingField);
     }
-
-    if !slots.last_transaction_seen {
+    if !has_last_transaction {
         return Err(ParseError::MissingField);
     }
 
-    if slots.last_timestamp.is_some() || slots.last_km_from_current.is_some() {
-        if slots.last_timestamp.is_none() || slots.last_km_from_current.is_none() {
+    if last_timestamp.is_some() || last_km_from_current.is_some() {
+        if last_timestamp.is_none() || last_km_from_current.is_none() {
             return Err(ParseError::InvalidFormat);
         }
     }
 
-    Ok(slots)
-}
+    out[2] = if customer_avg_amount > 0.0 {
+        quantize((amount / customer_avg_amount) / 10.0)
+    } else {
+        SCALE
+    };
 
-fn try_parse_single_pass(json: &[u8], out: &mut QueryVector) -> Result<(), ParseError> {
-    let slots = scan_fields(json)?;
-    build_query(json, &slots, out)
+    let known = known_hashes[..known_count].contains(&merchant_hash);
+    out[11] = if known { 0 } else { SCALE };
+
+    if let (Some(lm), Some(lk)) = (last_timestamp, last_km_from_current) {
+        let minutes_diff = requested_minute.saturating_sub(lm);
+        out[5] = quantize(minutes_diff as f64 * INV_1_440);
+        out[6] = quantize(lk * INV_1_000);
+    } else {
+        out[5] = -SCALE;
+        out[6] = -SCALE;
+    }
+
+    Ok(())
 }
 
 fn read_known_merchants_at(
@@ -520,84 +617,6 @@ fn read_known_merchants_at(
         i = content_start + rel + 1;
     }
     Ok(count)
-}
-
-fn build_query(json: &[u8], slots: &FieldSlots, out: &mut QueryVector) -> Result<(), ParseError> {
-    let amount_loc = slots.amount.ok_or(ParseError::MissingField)?;
-    let installments_loc = slots.installments.ok_or(ParseError::MissingField)?;
-    let requested_at_loc = slots.requested_at.ok_or(ParseError::MissingField)?;
-
-    let customer_avg_amount_loc = slots.customer_avg_amount.ok_or(ParseError::MissingField)?;
-    let tx_count_24h_loc = slots.tx_count_24h.ok_or(ParseError::MissingField)?;
-    let known_merchants_loc = slots.known_merchants.ok_or(ParseError::MissingField)?;
-
-    let merchant_id_loc = slots.merchant_id.ok_or(ParseError::MissingField)?;
-    let mcc_loc = slots.mcc.ok_or(ParseError::MissingField)?;
-    let merchant_avg_amount_loc = slots.merchant_avg_amount.ok_or(ParseError::MissingField)?;
-
-    let is_online_loc = slots.is_online.ok_or(ParseError::MissingField)?;
-    let card_present_loc = slots.card_present.ok_or(ParseError::MissingField)?;
-    let km_from_home_loc = slots.km_from_home.ok_or(ParseError::MissingField)?;
-
-    let amount = read_double_at(json, amount_loc.start)?;
-    out[0] = quantize(amount * INV_10_000);
-
-    let installments = read_int_at(json, installments_loc.start)?;
-    out[1] = quantize(installments as f64 * INV_12);
-
-    let requested_at = read_string_at(json, requested_at_loc.start)?;
-    let parsed = parse_datetime(requested_at)?;
-    let requested_minute = parsed.epoch_minute;
-    out[3] = quantize(parsed.hour as f64 * INV_23);
-    out[4] = quantize(parsed.day_of_week as f64 * INV_6);
-
-    let customer_avg_amount = read_double_at(json, customer_avg_amount_loc.start)?;
-    out[8] = quantize(read_int_at(json, tx_count_24h_loc.start)? as f64 * INV_20);
-
-    let mut known_hashes = [0u64; 64];
-    let known_count = read_known_merchants_at(json, known_merchants_loc.start, &mut known_hashes)?;
-
-    let merchant_id = read_string_at(json, merchant_id_loc.start)?;
-    let merchant_hash = hash_bytes(merchant_id);
-
-    let mcc = read_string_at(json, mcc_loc.start)?;
-    out[12] = quantize(mcc_risk(parse_mcc(mcc)));
-
-    let merchant_avg_amount = read_double_at(json, merchant_avg_amount_loc.start)?;
-    out[13] = quantize(merchant_avg_amount * INV_10_000);
-
-    let is_online = read_bool_at(json, is_online_loc.start)?;
-    out[9] = if is_online { SCALE } else { 0 };
-
-    let card_present = read_bool_at(json, card_present_loc.start)?;
-    out[10] = if card_present { SCALE } else { 0 };
-
-    let km_from_home = read_double_at(json, km_from_home_loc.start)?;
-    out[7] = quantize(km_from_home * INV_1_000);
-
-    if let (Some(ts), Some(last_km)) = (slots.last_timestamp, slots.last_km_from_current) {
-        let last_timestamp = read_string_at(json, ts.start)?;
-        let last_km_from_current = read_double_at(json, last_km.start)?;
-
-        let last_parsed = parse_datetime(last_timestamp)?;
-        let last_minute = last_parsed.epoch_minute;
-        let minutes_diff = requested_minute.saturating_sub(last_minute);
-        out[5] = quantize(minutes_diff as f64 * INV_1_440);
-        out[6] = quantize(last_km_from_current * INV_1_000);
-    } else {
-        // `last_transaction` can be `null`.
-        out[5] = -SCALE;
-        out[6] = -SCALE;
-    }
-
-    finish_vector(
-        out,
-        amount,
-        customer_avg_amount,
-        merchant_hash,
-        &known_hashes[..known_count],
-    );
-    Ok(())
 }
 
 struct Payload<'a> {
@@ -1009,6 +1028,80 @@ fn finish_vector(
     out[11] = if known { 0 } else { SCALE };
 }
 
+fn fast_parse_f64(s: &[u8]) -> Option<f64> {
+    if s.is_empty() {
+        return None;
+    }
+    let mut i = 0;
+    let mut neg = false;
+    if s[0] == b'-' {
+        neg = true;
+        i += 1;
+    } else if s[0] == b'+' {
+        i += 1;
+    }
+
+    let mut val = 0u64;
+    let mut decimal_point = None;
+    let mut digits = 0;
+
+    while i < s.len() {
+        let b = s[i];
+        if b == b'.' {
+            if decimal_point.is_some() {
+                return None;
+            }
+            decimal_point = Some(digits);
+        } else if b >= b'0' && b <= b'9' {
+            if digits >= 18 {
+                return None;
+            }
+            val = val * 10 + (b - b'0') as u64;
+            digits += 1;
+        } else {
+            return None;
+        }
+        i += 1;
+    }
+
+    if digits == 0 {
+        return None;
+    }
+
+    let scale = match decimal_point {
+        Some(pos) => digits - pos,
+        None => 0,
+    };
+
+    let factor = match scale {
+        0 => 1.0,
+        1 => 0.1,
+        2 => 0.01,
+        3 => 0.001,
+        4 => 0.0001,
+        5 => 0.00001,
+        6 => 0.000001,
+        7 => 0.0000001,
+        8 => 0.00000001,
+        9 => 0.000000001,
+        10 => 0.0000000001,
+        11 => 0.00000000001,
+        12 => 0.000000000001,
+        13 => 0.0000000000001,
+        14 => 0.00000000000001,
+        15 => 0.000000000000001,
+        16 => 0.0000000000000001,
+        17 => 0.00000000000000001,
+        _ => return None,
+    };
+
+    let mut result = val as f64 * factor;
+    if neg {
+        result = -result;
+    }
+    Some(result)
+}
+
 fn read_double_at(json: &[u8], start: usize) -> Result<f64, ParseError> {
     let s = &json[start..];
     let mut end = 0usize;
@@ -1041,8 +1134,13 @@ fn read_double_at(json: &[u8], start: usize) -> Result<f64, ParseError> {
     if end == 0 {
         return Err(ParseError::InvalidValue);
     }
-    let text = std::str::from_utf8(&s[..end]).map_err(|_| ParseError::InvalidValue)?;
-    text.parse::<f64>().map_err(|_| ParseError::InvalidValue)
+    let token = &s[..end];
+    if let Some(val) = fast_parse_f64(token) {
+        Ok(val)
+    } else {
+        let text = std::str::from_utf8(token).map_err(|_| ParseError::InvalidValue)?;
+        text.parse::<f64>().map_err(|_| ParseError::InvalidValue)
+    }
 }
 
 fn read_int_at(json: &[u8], start: usize) -> Result<i32, ParseError> {
@@ -1057,8 +1155,21 @@ fn read_int_at(json: &[u8], start: usize) -> Result<i32, ParseError> {
     if end == 0 || (end == 1 && s[0] == b'-') {
         return Err(ParseError::InvalidValue);
     }
-    let text = std::str::from_utf8(&s[..end]).map_err(|_| ParseError::InvalidValue)?;
-    text.parse::<i32>().map_err(|_| ParseError::InvalidValue)
+    let token = &s[..end];
+    let mut val = 0i32;
+    let mut neg = false;
+    let mut i = 0;
+    if token[0] == b'-' {
+        neg = true;
+        i += 1;
+    }
+    for &b in &token[i..] {
+        val = val.wrapping_mul(10).wrapping_add((b - b'0') as i32);
+    }
+    if neg {
+        val = -val;
+    }
+    Ok(val)
 }
 
 fn read_bool_at(json: &[u8], start: usize) -> Result<bool, ParseError> {

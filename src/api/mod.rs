@@ -3,11 +3,10 @@ use crate::index::SpecialistIndex;
 use crate::runtime;
 use crate::vector;
 use crate::{PACKED_DIMS, SCALE};
-use std::net::TcpListener;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub fn run(index_path: &str, bind_addr: &str, fd_socket: Option<&str>) {
+pub fn run(index_path: &str, fd_socket: Option<&str>) {
     if std::env::var("RINHA_MLOCK_ALL").as_deref() == Ok("1") {
         mlock_current_and_future();
     }
@@ -39,79 +38,17 @@ pub fn run(index_path: &str, bind_addr: &str, fd_socket: Option<&str>) {
     ready.store(true, Ordering::Release);
     eprintln!("warmup complete, accepting connections");
 
-    let pool_size = thread_pool_size();
-
     if let Some(socket_path) = fd_socket {
-        run_fd_mode(index, ready, socket_path, pool_size);
+        run_fd_mode(index, ready, socket_path);
     } else {
-        run_tcp_mode(index, ready, bind_addr, pool_size);
+        panic!("FD socket is required; set RINHA_FD_SOCKET or run through the LB");
     }
 }
 
-fn thread_pool_size() -> usize {
-    std::env::var("RINHA_THREAD_POOL_SIZE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(56)
-}
-
-fn fd_evented_enabled() -> bool {
-    std::env::var("RINHA_FD_EVENTED")
-        .ok()
-        .map(|v| v != "0")
-        .unwrap_or(true)
-}
-
-fn run_fd_mode(
-    index: Arc<SpecialistIndex>,
-    ready: Arc<AtomicBool>,
-    socket_path: &str,
-    pool_size: usize,
-) {
+fn run_fd_mode(index: Arc<SpecialistIndex>, ready: Arc<AtomicBool>, socket_path: &str) {
     use crate::fd_passing;
-    if fd_evented_enabled() {
-        eprintln!("starting FD evented server on {}", socket_path);
-        fd_passing::run_fd_evented_server(socket_path, move |req| {
-            handle_request(req, &index, &ready)
-        });
-    } else {
-        fd_passing::run_fd_server(socket_path, pool_size, move |stream| {
-            let index = Arc::clone(&index);
-            let ready = Arc::clone(&ready);
-            http::handle_connection(stream, |req| handle_request(req, &index, &ready));
-        });
-    }
-}
-
-fn run_tcp_mode(
-    index: Arc<SpecialistIndex>,
-    ready: Arc<AtomicBool>,
-    bind_addr: &str,
-    pool_size: usize,
-) {
-    let listener = TcpListener::bind(bind_addr)
-        .unwrap_or_else(|e| panic!("failed to bind {}: {}", bind_addr, e));
-
-    let pool = threadpool::Builder::new()
-        .num_threads(pool_size)
-        .thread_stack_size(64 * 1024)
-        .build();
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let _ = stream.set_nodelay(true);
-                let index = Arc::clone(&index);
-                let ready = Arc::clone(&ready);
-                pool.execute(move || {
-                    http::handle_connection(stream, |req| handle_request(req, &index, &ready));
-                });
-            }
-            Err(e) => {
-                eprintln!("accept error: {}", e);
-            }
-        }
-    }
+    eprintln!("starting FD evented server on {}", socket_path);
+    fd_passing::run_fd_evented_server(socket_path, move |req| handle_request(req, &index, &ready));
 }
 
 fn mlock_current_and_future() {

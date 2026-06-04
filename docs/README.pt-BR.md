@@ -22,12 +22,12 @@ Escolhas principais:
 - score kNN exato com `k = 5`;
 - vetores quantizados usando uma escala definida no build;
 - particionamento especialista e poda por bounding boxes preservando exatidao;
-- calculo de distancia com AVX2 quando disponivel, com fallback escalar;
+- calculo de distancia com AVX2 no build de producao;
 - parser HTTP minimo para os endpoints do desafio;
 - respostas HTTP precomputadas para os seis scores de fraude possiveis;
-- modo opcional de FD passing via Unix socket para o load balancer companion.
+- modo de FD passing via Unix socket para o load balancer companion.
 
-A API pode rodar em modo TCP para execucao direta local, ou em modo FD passing quando `RINHA_FD_SOCKET` esta configurado.
+A API em runtime espera FD passing. Cada processo de API escuta em `RINHA_FD_SOCKET` ou, por padrao, em `/sockets/${HOSTNAME}.sock`. O load balancer escuta em `LB_PORT` e distribui os file descriptors TCP aceitos para a lista `API_SOCKETS`, separada por virgulas.
 
 ## Arquitetura
 
@@ -51,6 +51,7 @@ exact kNN fraud scoring
 A imagem Docker compila dois binarios Rust:
 
 - `api`: atende `/ready` e `/fraud-score`;
+- `lb`: aceita trafego TCP e repassa file descriptors para os Unix sockets das APIs;
 - `preprocess`: converte o arquivo oficial de referencias para o indice compacto de runtime.
 
 Durante o build da imagem, o `preprocess` baixa e converte o arquivo oficial de referencias para `/app/index/rinha-specialist.idx`. Em runtime, a API mapeia esse arquivo em memoria, aquece um pequeno conjunto de queries sinteticas e atende requisicoes a partir do indice mapeado.
@@ -98,10 +99,11 @@ Os defaults de runtime estao ajustados para a implementacao atual:
 | Configuracao | Default |
 | --- | --- |
 | Escala dos vetores | `10000` |
-| Leaf size do indice | `48` no build Docker |
-| Tamanho do thread pool | `256` |
-| Queries de warmup | `256` |
-| Travamento do indice em memoria | desativado por padrao |
+| Leaf size do indice | `56` no build Docker |
+| Porta do LB | `9999` |
+| Upstreams do LB | `/sockets/api1.sock,/sockets/api2.sock` |
+| Queries de warmup | `2048` |
+| Travamento do indice em memoria | ativado no runtime Docker |
 
 Notas detalhadas de implementacao e tuning: [Notas de performance](performance.md)
 
@@ -137,7 +139,7 @@ Parar a stack local:
 make down
 ```
 
-O compose local espera uma imagem companion de load balancer chamada `rinha-api-lb:local`. O compose publico do desafio usa a imagem publicada.
+O compose local espera as imagens `rinha-rust-api:local` e `rinha-rust-lb:local`. O LB e configurado com `LB_PORT`, `LB_BACKLOG`, `LB_ACCEPT_BATCH` e `API_SOCKETS`.
 
 ## Imagem Docker
 
@@ -160,8 +162,8 @@ src/http/               parser HTTP/1.1 minimo e respostas fixas
 src/index/              formato, builder, loader mmap e busca kNN exata
 src/vector/             parser do payload do desafio e quantizacao do vetor
 docker/Dockerfile       build multi-stage da imagem da API
-docker/docker-compose.yml
-docker-compose.local.yml
+docker/compose.local.yml
+docker/compose.submission.yml
 docs/                   arquitetura, performance e README em portugues
 info.json               metadados do desafio
 ```

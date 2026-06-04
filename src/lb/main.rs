@@ -3,123 +3,123 @@ use std::os::fd::RawFd;
 use std::thread;
 use std::time::Duration;
 
-const DEFAULT_PORT: u16 = 9999;
-const DEFAULT_BACKLOG: i32 = 65_535;
-const DEFAULT_ACCEPT_BATCH: usize = 128;
-const DEFAULT_API_SOCKETS: &str = "/sockets/api1.sock,/sockets/api2.sock";
-const MAX_BACKENDS: usize = 32;
-const CONTROL_SNDBUF: i32 = 256 * 1024;
+const STANDARD_PORT: u16 = 9999;
+const DEFAULT_QUEUE_DEPTH: i32 = 65_535;
+const DEFAULT_BATCH_LIMIT: usize = 128;
+const DEFAULT_UPSTREAM_PATHS: &str = "/sockets/api1.sock,/sockets/api2.sock";
+const MAX_UPSTREAM_NODES: usize = 32;
+const UNIX_SEND_BUFFER: i32 = 256 * 1024;
 
-struct Config {
-    port: u16,
-    backlog: i32,
-    accept_batch: usize,
-    backends: Vec<String>,
+struct ProxySettings {
+    listen_port: u16,
+    queue_depth: i32,
+    batch_limit: usize,
+    upstream_paths: Vec<String>,
 }
 
-impl Config {
-    fn from_env() -> Self {
-        let backends = std::env::var("API_SOCKETS")
-            .unwrap_or_else(|_| DEFAULT_API_SOCKETS.to_string())
+impl ProxySettings {
+    fn load_from_environment() -> Self {
+        let upstream_paths = std::env::var("API_SOCKETS")
+            .unwrap_or_else(|_| DEFAULT_UPSTREAM_PATHS.to_string())
             .split(',')
             .map(str::trim)
             .filter(|path| !path.is_empty())
-            .take(MAX_BACKENDS)
+            .take(MAX_UPSTREAM_NODES)
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
 
         Self {
-            port: env_u16("LB_PORT").unwrap_or(DEFAULT_PORT),
-            backlog: env_i32("LB_BACKLOG").unwrap_or(DEFAULT_BACKLOG),
-            accept_batch: env_usize("LB_ACCEPT_BATCH").unwrap_or(DEFAULT_ACCEPT_BATCH),
-            backends,
+            listen_port: parse_env_u16("LB_PORT").unwrap_or(STANDARD_PORT),
+            queue_depth: parse_env_i32("LB_BACKLOG").unwrap_or(DEFAULT_QUEUE_DEPTH),
+            batch_limit: parse_env_usize("LB_ACCEPT_BATCH").unwrap_or(DEFAULT_BATCH_LIMIT),
+            upstream_paths,
         }
     }
 }
 
-struct Backend {
-    path: String,
-    fd: RawFd,
-    byte: u8,
-    iov: libc::iovec,
-    control: [u8; 64],
-    msg: libc::msghdr,
-    cmsg: *mut libc::cmsghdr,
+struct UpstreamNode {
+    socket_path: String,
+    conn_fd: RawFd,
+    signal_byte: u8,
+    data_vec: libc::iovec,
+    ctl_buffer: [u8; 64],
+    message_header: libc::msghdr,
+    ctl_message: *mut libc::cmsghdr,
 }
 
-impl Backend {
-    fn connect(path: String) -> Self {
-        wait_for_socket(&path);
-        let fd = loop {
-            match connect_seqpacket(&path) {
+impl UpstreamNode {
+    fn establish_link(socket_path: String) -> Self {
+        await_socket_file(&socket_path);
+        let conn_fd = loop {
+            match open_unix_stream(&socket_path) {
                 Ok(fd) => break fd,
                 Err(_) => thread::sleep(Duration::from_millis(20)),
             }
         };
-        let mut backend = Self {
-            path,
-            fd,
-            byte: 1,
-            iov: libc::iovec {
+        let mut node = Self {
+            socket_path,
+            conn_fd,
+            signal_byte: 1,
+            data_vec: libc::iovec {
                 iov_base: std::ptr::null_mut(),
                 iov_len: 0,
             },
-            control: [0; 64],
-            msg: unsafe { std::mem::zeroed() },
-            cmsg: std::ptr::null_mut(),
+            ctl_buffer: [0; 64],
+            message_header: unsafe { std::mem::zeroed() },
+            ctl_message: std::ptr::null_mut(),
         };
-        backend.init_msg();
-        eprintln!("[lb] connected {}", backend.path);
-        backend
+        node.build_message_template();
+        eprintln!("[lb] connected {}", node.socket_path);
+        node
     }
 
-    fn reconnect(&mut self) {
-        unsafe { libc::close(self.fd) };
-        wait_for_socket(&self.path);
-        self.fd = loop {
-            match connect_seqpacket(&self.path) {
+    fn restore_connection(&mut self) {
+        unsafe { libc::close(self.conn_fd) };
+        await_socket_file(&self.socket_path);
+        self.conn_fd = loop {
+            match open_unix_stream(&self.socket_path) {
                 Ok(fd) => break fd,
                 Err(_) => thread::sleep(Duration::from_millis(20)),
             }
         };
-        self.init_msg();
-        eprintln!("[lb] reconnected {}", self.path);
+        self.build_message_template();
+        eprintln!("[lb] reconnected {}", self.socket_path);
     }
 
-    fn init_msg(&mut self) {
-        self.iov = libc::iovec {
-            iov_base: (&mut self.byte as *mut u8).cast(),
+    fn build_message_template(&mut self) {
+        self.data_vec = libc::iovec {
+            iov_base: (&mut self.signal_byte as *mut u8).cast(),
             iov_len: 1,
         };
-        self.msg = unsafe { std::mem::zeroed() };
-        self.msg.msg_iov = &mut self.iov;
-        self.msg.msg_iovlen = 1;
-        self.msg.msg_control = self.control.as_mut_ptr().cast();
-        self.msg.msg_controllen = self.control.len();
-        self.cmsg = unsafe { libc::CMSG_FIRSTHDR(&self.msg) };
-        if !self.cmsg.is_null() {
+        self.message_header = unsafe { std::mem::zeroed() };
+        self.message_header.msg_iov = &mut self.data_vec;
+        self.message_header.msg_iovlen = 1;
+        self.message_header.msg_control = self.ctl_buffer.as_mut_ptr().cast();
+        self.message_header.msg_controllen = self.ctl_buffer.len();
+        self.ctl_message = unsafe { libc::CMSG_FIRSTHDR(&self.message_header) };
+        if !self.ctl_message.is_null() {
             unsafe {
-                (*self.cmsg).cmsg_level = libc::SOL_SOCKET;
-                (*self.cmsg).cmsg_type = libc::SCM_RIGHTS;
-                (*self.cmsg).cmsg_len =
+                (*self.ctl_message).cmsg_level = libc::SOL_SOCKET;
+                (*self.ctl_message).cmsg_type = libc::SCM_RIGHTS;
+                (*self.ctl_message).cmsg_len =
                     libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as usize;
             }
         }
     }
 
-    fn send_fd(&mut self, client_fd: RawFd, nonblocking: bool) -> io::Result<()> {
-        if self.cmsg.is_null() {
+    fn transfer_descriptor(&mut self, peer_fd: RawFd, async_mode: bool) -> io::Result<()> {
+        if self.ctl_message.is_null() {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "missing cmsg"));
         }
         unsafe {
-            let data = libc::CMSG_DATA(self.cmsg).cast::<RawFd>();
-            *data = client_fd;
+            let data = libc::CMSG_DATA(self.ctl_message).cast::<RawFd>();
+            *data = peer_fd;
         }
-        self.msg.msg_controllen =
+        self.message_header.msg_controllen =
             unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) as usize };
-        let flags = libc::MSG_NOSIGNAL | if nonblocking { libc::MSG_DONTWAIT } else { 0 };
+        let flags = libc::MSG_NOSIGNAL | if async_mode { libc::MSG_DONTWAIT } else { 0 };
         loop {
-            let sent = unsafe { libc::sendmsg(self.fd, &self.msg, flags) };
+            let sent = unsafe { libc::sendmsg(self.conn_fd, &self.message_header, flags) };
             if sent > 0 {
                 return Ok(());
             }
@@ -132,9 +132,9 @@ impl Backend {
     }
 }
 
-impl Drop for Backend {
+impl Drop for UpstreamNode {
     fn drop(&mut self) {
-        unsafe { libc::close(self.fd) };
+        unsafe { libc::close(self.conn_fd) };
     }
 }
 
@@ -143,82 +143,86 @@ fn main() {
         libc::signal(libc::SIGPIPE, libc::SIG_IGN);
     }
 
-    let config = Config::from_env();
-    if config.backends.is_empty() {
+    let settings = ProxySettings::load_from_environment();
+    if settings.upstream_paths.is_empty() {
         eprintln!("[lb] API_SOCKETS has no backends");
         std::process::exit(2);
     }
 
-    let mut backends = config
-        .backends
+    let mut upstream_pool = settings
+        .upstream_paths
         .iter()
         .cloned()
-        .map(Backend::connect)
+        .map(UpstreamNode::establish_link)
         .collect::<Vec<_>>();
-    for backend in &mut backends {
-        backend.init_msg();
+    for node in &mut upstream_pool {
+        node.build_message_template();
     }
-    let listener = listen_tcp(config.port, config.backlog).unwrap_or_else(|err| {
-        eprintln!("[lb] failed to listen on :{}: {}", config.port, err);
-        std::process::exit(3);
-    });
+    let tcp_socket = create_tcp_listener(settings.listen_port, settings.queue_depth)
+        .unwrap_or_else(|err| {
+            eprintln!(
+                "[lb] failed to listen on :{}: {}",
+                settings.listen_port, err
+            );
+            std::process::exit(3);
+        });
 
     eprintln!(
         "[lb] listening :{} backlog={} batch={} backends={}",
-        config.port,
-        config.backlog,
-        config.accept_batch,
-        backends.len()
+        settings.listen_port,
+        settings.queue_depth,
+        settings.batch_limit,
+        upstream_pool.len()
     );
 
-    let mut rr = 0usize;
+    let mut rotation_cursor = 0usize;
     loop {
-        let mut accepted = 0usize;
-        while accepted < config.accept_batch {
-            let client_fd = match accept_client(listener) {
+        let mut processed_count = 0usize;
+        while processed_count < settings.batch_limit {
+            let peer_fd = match accept_incoming(tcp_socket) {
                 Ok(Some(fd)) => fd,
                 Ok(None) => break,
                 Err(_) => break,
             };
-            accepted += 1;
-            tune_client(client_fd);
+            processed_count += 1;
+            configure_client_socket(peer_fd);
 
-            let first = rr;
-            rr = (rr + 1) % backends.len();
-            let mut ok = false;
-            for offset in 0..backends.len() {
-                let idx = (first + offset) % backends.len();
-                if send_to_backend(&mut backends[idx], client_fd, true).is_ok() {
-                    ok = true;
+            let start_cursor = rotation_cursor;
+            rotation_cursor = (rotation_cursor + 1) % upstream_pool.len();
+            let mut dispatched = false;
+            for step in 0..upstream_pool.len() {
+                let position = (start_cursor + step) % upstream_pool.len();
+                if route_to_upstream(&mut upstream_pool[position], peer_fd, true).is_ok() {
+                    dispatched = true;
                     break;
                 }
             }
-            if !ok {
-                let _ = send_to_backend(&mut backends[first], client_fd, false);
+            if !dispatched {
+                let _ = route_to_upstream(&mut upstream_pool[start_cursor], peer_fd, false);
             }
-            unsafe { libc::close(client_fd) };
+            unsafe { libc::close(peer_fd) };
         }
 
-        if accepted == 0 {
-            wait_read(listener);
+        if processed_count == 0 {
+            block_until_readable(tcp_socket);
         }
     }
 }
 
-fn send_to_backend(backend: &mut Backend, client_fd: RawFd, nonblocking: bool) -> io::Result<()> {
-    match backend.send_fd(client_fd, nonblocking) {
+fn route_to_upstream(node: &mut UpstreamNode, peer_fd: RawFd, async_mode: bool) -> io::Result<()> {
+    match node.transfer_descriptor(peer_fd, async_mode) {
         Ok(()) => Ok(()),
         Err(err) => {
-            if nonblocking && err.raw_os_error() == Some(libc::EAGAIN) {
+            if async_mode && err.raw_os_error() == Some(libc::EAGAIN) {
                 return Err(err);
             }
-            backend.reconnect();
-            backend.send_fd(client_fd, nonblocking)
+            node.restore_connection();
+            node.transfer_descriptor(peer_fd, async_mode)
         }
     }
 }
 
-fn listen_tcp(port: u16, backlog: i32) -> io::Result<RawFd> {
+fn create_tcp_listener(port: u16, queue_depth: i32) -> io::Result<RawFd> {
     let fd = unsafe {
         libc::socket(
             libc::AF_INET,
@@ -231,9 +235,9 @@ fn listen_tcp(port: u16, backlog: i32) -> io::Result<RawFd> {
     }
 
     let result = (|| {
-        set_int_sockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR, 1)?;
-        set_int_sockopt(fd, libc::SOL_SOCKET, libc::SO_REUSEPORT, 1)?;
-        let _ = set_int_sockopt(fd, libc::IPPROTO_TCP, 9, 1);
+        apply_socket_option(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR, 1)?;
+        apply_socket_option(fd, libc::SOL_SOCKET, libc::SO_REUSEPORT, 1)?;
+        let _ = apply_socket_option(fd, libc::IPPROTO_TCP, 9, 1);
 
         let addr = libc::sockaddr_in {
             sin_family: libc::AF_INET as libc::sa_family_t,
@@ -253,7 +257,7 @@ fn listen_tcp(port: u16, backlog: i32) -> io::Result<RawFd> {
         if rc != 0 {
             return Err(io::Error::last_os_error());
         }
-        if unsafe { libc::listen(fd, backlog) } != 0 {
+        if unsafe { libc::listen(fd, queue_depth) } != 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
@@ -266,7 +270,7 @@ fn listen_tcp(port: u16, backlog: i32) -> io::Result<RawFd> {
     Ok(fd)
 }
 
-fn accept_client(listener: RawFd) -> io::Result<Option<RawFd>> {
+fn accept_incoming(listener: RawFd) -> io::Result<Option<RawFd>> {
     let fd = unsafe {
         libc::accept4(
             listener,
@@ -286,14 +290,14 @@ fn accept_client(listener: RawFd) -> io::Result<Option<RawFd>> {
     }
 }
 
-fn connect_seqpacket(path: &str) -> io::Result<RawFd> {
+fn open_unix_stream(path: &str) -> io::Result<RawFd> {
     let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC, 0) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
     let result = (|| {
-        set_int_sockopt(fd, libc::SOL_SOCKET, libc::SO_SNDBUF, CONTROL_SNDBUF)?;
-        let addr = unix_sockaddr(path)?;
+        apply_socket_option(fd, libc::SOL_SOCKET, libc::SO_SNDBUF, UNIX_SEND_BUFFER)?;
+        let addr = build_unix_address(path)?;
         let rc = unsafe {
             libc::connect(
                 fd,
@@ -313,7 +317,7 @@ fn connect_seqpacket(path: &str) -> io::Result<RawFd> {
     Ok(fd)
 }
 
-fn wait_for_socket(path: &str) {
+fn await_socket_file(path: &str) {
     for _ in 0..600 {
         if std::path::Path::new(path).exists() {
             return;
@@ -322,7 +326,7 @@ fn wait_for_socket(path: &str) {
     }
 }
 
-fn wait_read(fd: RawFd) {
+fn block_until_readable(fd: RawFd) {
     let mut pfd = libc::pollfd {
         fd,
         events: libc::POLLIN,
@@ -333,12 +337,12 @@ fn wait_read(fd: RawFd) {
     }
 }
 
-fn tune_client(fd: RawFd) {
-    let _ = set_int_sockopt(fd, libc::IPPROTO_TCP, libc::TCP_NODELAY, 1);
-    let _ = set_int_sockopt(fd, libc::IPPROTO_TCP, libc::TCP_QUICKACK, 1);
+fn configure_client_socket(fd: RawFd) {
+    let _ = apply_socket_option(fd, libc::IPPROTO_TCP, libc::TCP_NODELAY, 1);
+    let _ = apply_socket_option(fd, libc::IPPROTO_TCP, libc::TCP_QUICKACK, 1);
 }
 
-fn set_int_sockopt(fd: RawFd, level: i32, optname: i32, value: i32) -> io::Result<()> {
+fn apply_socket_option(fd: RawFd, level: i32, optname: i32, value: i32) -> io::Result<()> {
     let opt: libc::c_int = value;
     let rc = unsafe {
         libc::setsockopt(
@@ -355,12 +359,12 @@ fn set_int_sockopt(fd: RawFd, level: i32, optname: i32, value: i32) -> io::Resul
     Ok(())
 }
 
-struct UnixSockAddr {
+struct UnixAddress {
     storage: libc::sockaddr_un,
     len: libc::socklen_t,
 }
 
-fn unix_sockaddr(path: &str) -> io::Result<UnixSockAddr> {
+fn build_unix_address(path: &str) -> io::Result<UnixAddress> {
     let bytes = path.as_bytes();
     if bytes.is_empty() || bytes.len() >= 108 {
         return Err(io::Error::new(
@@ -374,20 +378,20 @@ fn unix_sockaddr(path: &str) -> io::Result<UnixSockAddr> {
     for (dst, src) in storage.sun_path.iter_mut().zip(bytes.iter().copied()) {
         *dst = src as libc::c_char;
     }
-    Ok(UnixSockAddr {
+    Ok(UnixAddress {
         storage,
         len: (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + 1) as libc::socklen_t,
     })
 }
 
-fn env_u16(name: &str) -> Option<u16> {
+fn parse_env_u16(name: &str) -> Option<u16> {
     std::env::var(name).ok()?.parse().ok()
 }
 
-fn env_i32(name: &str) -> Option<i32> {
+fn parse_env_i32(name: &str) -> Option<i32> {
     std::env::var(name).ok()?.parse().ok()
 }
 
-fn env_usize(name: &str) -> Option<usize> {
+fn parse_env_usize(name: &str) -> Option<usize> {
     std::env::var(name).ok()?.parse().ok()
 }

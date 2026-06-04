@@ -1,11 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use crate::DIMS;
     use crate::index::SpecialistIndex;
     use crate::index::build::{Reference, build_index};
     use crate::index::partition_scheme::PartitionScheme;
-    #[cfg(target_arch = "x86_64")]
-    use crate::index::{LANES, scan_block_avx2, scan_block_scalar};
     use crate::vector;
     use crate::{PACKED_DIMS, SCALE};
 
@@ -28,7 +25,7 @@ mod tests {
                 label: 1,
             },
         ];
-        let index_bytes = build_index(references, 64, 0, PartitionScheme::recommended())
+        let index_bytes = build_index(references, 64, PartitionScheme::recommended())
             .expect("failed to build index");
         std::fs::write(index_path, index_bytes).expect("failed to write test index");
 
@@ -46,56 +43,6 @@ mod tests {
                     std::str::from_utf8(body).unwrap_or("???")
                 );
             }
-        }
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    #[test]
-    fn scan_block_avx2_matches_scalar_for_quantized_extremes() {
-        if !std::arch::is_x86_feature_detected!("avx2") {
-            return;
-        }
-
-        let mut vectors = vec![0i16; DIMS * LANES];
-        for d in 0..DIMS {
-            for lane in 0..LANES {
-                vectors[d * LANES + lane] = match (d + lane) % 7 {
-                    0 => -(SCALE as i16),
-                    1 => -1234,
-                    2 => -1,
-                    3 => 0,
-                    4 => 1,
-                    5 => 4321,
-                    _ => SCALE as i16,
-                };
-            }
-        }
-
-        let queries = [
-            [0i16; PACKED_DIMS],
-            [SCALE as i16; PACKED_DIMS],
-            [-(SCALE as i16); PACKED_DIMS],
-            {
-                let mut query = [0i16; PACKED_DIMS];
-                for (i, value) in query.iter_mut().take(DIMS).enumerate() {
-                    *value = match i % 6 {
-                        0 => -(SCALE as i16),
-                        1 => -5000,
-                        2 => -1,
-                        3 => 0,
-                        4 => 1,
-                        _ => SCALE as i16,
-                    };
-                }
-                query
-            },
-        ];
-
-        for query in queries {
-            assert_eq!(
-                scan_block_avx2(&vectors, 0, &query),
-                scan_block_scalar(&vectors, 0, &query)
-            );
         }
     }
 }

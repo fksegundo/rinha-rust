@@ -182,13 +182,9 @@ fn run_compare(args: &[String]) {
             scheme_name
         );
 
-        let index_bytes = rinha_rust::index::build::build_index(
-            references.clone(),
-            leaf_size,
-            128,
-            scheme.clone(),
-        )
-        .unwrap();
+        let index_bytes =
+            rinha_rust::index::build::build_index(references.clone(), leaf_size, scheme.clone())
+                .unwrap();
 
         std::fs::write(temp_idx_path, &index_bytes).expect("write temp index");
 

@@ -1,5 +1,4 @@
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::sync::OnceLock;
 
 pub const RESPONSE_READY: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
 pub const RESPONSE_NOT_READY: &[u8] =
@@ -50,7 +49,7 @@ where
                 keep_alive: req.keep_alive,
             }
         }
-        ParseResult::Reject(response, _) => BufferStep::RejectAndClose { response },
+        ParseResult::Reject(response) => BufferStep::RejectAndClose { response },
         ParseResult::NeedMore => BufferStep::NeedMore,
     }
 }
@@ -80,13 +79,13 @@ pub struct Request<'a> {
 pub fn parse_request(buf: &[u8]) -> Option<(Request<'_>, usize)> {
     match parse_request_result(buf) {
         ParseResult::Complete(req, consumed) => Some((req, consumed)),
-        ParseResult::NeedMore | ParseResult::Reject(_, _) => None,
+        ParseResult::NeedMore | ParseResult::Reject(_) => None,
     }
 }
 
 pub(crate) enum ParseResult<'a> {
     Complete(Request<'a>, usize),
-    Reject(&'static [u8], usize),
+    Reject(&'static [u8]),
     NeedMore,
 }
 
@@ -97,13 +96,13 @@ pub(crate) fn parse_request_result(buf: &[u8]) -> ParseResult<'_> {
     };
     let (method, path, headers_len) = match parse_first_line(buf) {
         Some(parts) => parts,
-        None => return ParseResult::Reject(RESPONSE_BAD_REQUEST, header_end),
+        None => return ParseResult::Reject(RESPONSE_BAD_REQUEST),
     };
     let content_length = find_content_length(&buf[headers_len..header_end]);
 
     let path_bytes = &buf[path.0..path.1];
     if let Some(response) = early_rejection(method, path_bytes, content_length) {
-        return ParseResult::Reject(response, header_end);
+        return ParseResult::Reject(response);
     }
 
     let body_start = header_end;
@@ -112,9 +111,7 @@ pub(crate) fn parse_request_result(buf: &[u8]) -> ParseResult<'_> {
         return ParseResult::NeedMore;
     }
 
-    let keep_alive = !buf[..header_end]
-        .windows(17)
-        .any(|w| w.eq_ignore_ascii_case(b"Connection: close"));
+    let keep_alive = assume_keep_alive() || !contains_connection_close(&buf[..header_end]);
 
     ParseResult::Complete(
         Request {
@@ -179,7 +176,12 @@ fn parse_first_line(buf: &[u8]) -> Option<(Method, (usize, usize), usize)> {
 }
 
 fn find_content_length(headers: &[u8]) -> usize {
+    const EXACT_NEEDLE: &[u8] = b"Content-Length:";
     const NEEDLE: &[u8] = b"content-length:";
+    if let Some(pos) = find_bytes(headers, EXACT_NEEDLE) {
+        return parse_content_length_value(&headers[pos + EXACT_NEEDLE.len()..]);
+    }
+
     let n = headers.len();
     if n < NEEDLE.len() {
         return 0;
@@ -189,20 +191,7 @@ fn find_content_length(headers: &[u8]) -> usize {
         if headers[i].to_ascii_lowercase() == b'c' {
             let window = &headers[i..i + NEEDLE.len()];
             if window.eq_ignore_ascii_case(NEEDLE) {
-                let rest = &headers[i + NEEDLE.len()..];
-                let val_start = rest.iter().position(|&b| !is_ws(b)).unwrap_or(0);
-                let val_end = rest[val_start..]
-                    .iter()
-                    .position(|&b| b == b'\r' || is_ws(b))
-                    .unwrap_or(rest.len() - val_start);
-                let mut num = 0usize;
-                for &b in &rest[val_start..val_start + val_end] {
-                    if !b.is_ascii_digit() {
-                        return 0;
-                    }
-                    num = num.saturating_mul(10).saturating_add((b - b'0') as usize);
-                }
-                return num;
+                return parse_content_length_value(&headers[i + NEEDLE.len()..]);
             }
         }
         i += 1;
@@ -210,68 +199,68 @@ fn find_content_length(headers: &[u8]) -> usize {
     0
 }
 
-fn is_ws(b: u8) -> bool {
-    matches!(b, b' ' | b'\t')
+fn parse_content_length_value(rest: &[u8]) -> usize {
+    let val_start = rest.iter().position(|&b| !is_ws(b)).unwrap_or(0);
+    let val_end = rest[val_start..]
+        .iter()
+        .position(|&b| b == b'\r' || is_ws(b))
+        .unwrap_or(rest.len() - val_start);
+    let mut num = 0usize;
+    for &b in &rest[val_start..val_start + val_end] {
+        if !b.is_ascii_digit() {
+            return 0;
+        }
+        num = num.saturating_mul(10).saturating_add((b - b'0') as usize);
+    }
+    num
 }
 
-pub fn handle_connection<F>(mut stream: TcpStream, mut handler: F)
-where
-    F: FnMut(&Request) -> &'static [u8],
-{
-    let mut buf = [0u8; BUF_SIZE];
-    let mut used = 0usize;
-    loop {
-        match stream.read(&mut buf[used..]) {
-            Ok(0) => break,
-            Ok(n) => {
-                used += n;
-                let mut processed = 0usize;
-                while processed < used {
-                    match process_one_request(&buf[processed..used], &mut handler) {
-                        BufferStep::Respond {
-                            consumed,
-                            response,
-                            keep_alive,
-                        } => {
-                            if stream.write_all(response).is_err() {
-                                return;
-                            }
-                            processed += consumed;
-                            if !keep_alive {
-                                return;
-                            }
-                        }
-                        BufferStep::RejectAndClose { response } => {
-                            let _ = stream.write_all(response);
-                            return;
-                        }
-                        BufferStep::NeedMore => {
-                            if used >= buf.len() {
-                                let _ = stream.write_all(RESPONSE_BAD_REQUEST);
-                                return;
-                            }
-                            break;
-                        }
-                    }
-                }
-                if processed > 0 {
-                    buf.copy_within(processed..used, 0);
-                    used -= processed;
-                }
-            }
-            Err(_) => break,
-        }
+fn contains_connection_close(headers: &[u8]) -> bool {
+    if find_bytes(headers, b"Connection: close").is_some()
+        || find_bytes(headers, b"connection: close").is_some()
+    {
+        return true;
     }
+    headers
+        .windows(17)
+        .any(|w| w.eq_ignore_ascii_case(b"Connection: close"))
+}
+
+fn assume_keep_alive() -> bool {
+    static ASSUME_KEEP_ALIVE: OnceLock<bool> = OnceLock::new();
+    *ASSUME_KEEP_ALIVE.get_or_init(|| {
+        std::env::var("RINHA_ASSUME_KEEP_ALIVE")
+            .map(|value| value != "0")
+            .unwrap_or(false)
+    })
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    let found = unsafe {
+        libc::memmem(
+            haystack.as_ptr().cast(),
+            haystack.len(),
+            needle.as_ptr().cast(),
+            needle.len(),
+        )
+    };
+    if found.is_null() {
+        None
+    } else {
+        Some((found as usize) - (haystack.as_ptr() as usize))
+    }
+}
+
+fn is_ws(b: u8) -> bool {
+    matches!(b, b' ' | b'\t')
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
-    use std::net::{Shutdown, TcpListener, TcpStream};
-    use std::thread;
-    use std::time::Duration;
-
     #[test]
     fn parses_first_line_without_allocating_parts() {
         let request =
@@ -299,9 +288,8 @@ mod tests {
         let request = b"POST /missing HTTP/1.1\r\nHost: localhost\r\nContent-Length: 64000\r\n\r\n";
 
         match parse_request_result(request) {
-            ParseResult::Reject(response, consumed) => {
+            ParseResult::Reject(response) => {
                 assert_eq!(response, RESPONSE_NOT_FOUND);
-                assert_eq!(consumed, request.len());
             }
             _ => panic!("unknown path should be rejected after headers"),
         }
@@ -313,44 +301,11 @@ mod tests {
             b"POST /fraud-score HTTP/1.1\r\nHost: localhost\r\nContent-Length: 64000\r\n\r\n";
 
         match parse_request_result(request) {
-            ParseResult::Reject(response, consumed) => {
+            ParseResult::Reject(response) => {
                 assert_eq!(response, RESPONSE_BAD_REQUEST);
-                assert_eq!(consumed, request.len());
             }
             _ => panic!("oversized fraud body should be rejected after headers"),
         }
-    }
-
-    #[test]
-    fn oversized_request_is_rejected_when_buffer_fills() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
-        let addr = listener.local_addr().expect("listener addr");
-
-        let server = thread::spawn(move || {
-            let (stream, _) = listener.accept().expect("accept test connection");
-            handle_connection(stream, |_| RESPONSE_READY);
-        });
-
-        let mut stream = TcpStream::connect(addr).expect("connect test server");
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .expect("set read timeout");
-
-        let body = vec![b'x'; 9_000];
-        write!(
-            stream,
-            "POST /fraud-score HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        )
-        .expect("write headers");
-        stream.write_all(&body).expect("write body");
-        stream.shutdown(Shutdown::Write).expect("shutdown write");
-
-        let mut response = [0u8; 128];
-        let n = stream.read(&mut response).expect("read response");
-        server.join().expect("server thread");
-
-        assert!(response[..n].starts_with(RESPONSE_BAD_REQUEST));
     }
 
     #[test]

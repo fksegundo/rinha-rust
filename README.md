@@ -22,12 +22,12 @@ Key implementation choices:
 - exact kNN scoring with `k = 5`;
 - quantized vectors using a build-time scale;
 - specialist partitioning and bounding-box pruning while preserving exactness;
-- AVX2-assisted distance scans when available, with a scalar fallback;
+- AVX2 distance scans in the production build;
 - minimal HTTP parsing for the challenge endpoints;
 - precomputed HTTP responses for all six possible fraud scores;
-- optional Unix socket FD passing mode for the companion load balancer.
+- Unix socket FD passing mode for the companion load balancer.
 
-The API can run in TCP mode for a direct local process, or in FD-passing mode when `RINHA_FD_SOCKET` is configured.
+The API runtime expects FD passing. Each API process listens on `RINHA_FD_SOCKET` or, by default, `/sockets/${HOSTNAME}.sock`. The load balancer listens on `LB_PORT` and dispatches accepted TCP client descriptors to the comma-separated `API_SOCKETS` list.
 
 ## Architecture
 
@@ -51,6 +51,7 @@ exact kNN fraud scoring
 The Docker image builds two Rust binaries:
 
 - `api`: serves `/ready` and `/fraud-score`;
+- `lb`: accepts TCP traffic and forwards client file descriptors to API Unix sockets;
 - `preprocess`: converts the official references file into the compact runtime index.
 
 During the image build, `preprocess` downloads and converts the official references file into `/app/index/rinha-specialist.idx`. At runtime, the API maps that file, warms up a small set of synthetic queries, and serves requests from the mapped index.
@@ -96,10 +97,11 @@ The runtime defaults are tuned for the current implementation:
 | Setting | Default |
 | --- | --- |
 | Vector scale | `10000` |
-| Index leaf size | `48` in the Docker build |
-| Thread pool size | `256` |
-| Warmup queries | `256` |
-| Index locking | disabled by default |
+| Index leaf size | `56` in the Docker build |
+| LB listen port | `9999` |
+| LB upstreams | `/sockets/api1.sock,/sockets/api2.sock` |
+| Warmup queries | `2048` |
+| Index locking | enabled in the Docker runtime |
 
 
 ## Local Development
@@ -134,7 +136,7 @@ Stop the local stack:
 make down
 ```
 
-The local compose file expects a companion load balancer image named `rinha-api-lb:local`. The public challenge compose uses the published image instead.
+The local compose file expects `rinha-rust-api:local` and `rinha-rust-lb:local`. The LB is configured with `LB_PORT`, `LB_BACKLOG`, `LB_ACCEPT_BATCH`, and `API_SOCKETS`.
 
 ## Docker Image
 
@@ -157,8 +159,8 @@ src/http/               minimal HTTP/1.1 parser and fixed responses
 src/index/              index format, builder, mmap loader and exact kNN search
 src/vector/             challenge payload parsing and vector quantization
 docker/Dockerfile       multi-stage API image build
-docker/docker-compose.yml
-docker-compose.local.yml
+docker/compose.local.yml
+docker/compose.submission.yml
 docs/                   architecture, performance and Portuguese README
 info.json               challenge metadata
 ```
